@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "dgSpecHash": "5ylCpsNfcAU=",
+  "success": true,
+  "projectFilePath": "D:\\Gorstak\\Ceprkac\\Ceprkac.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\igneo\\.nuget\\packages\\microsoft.web.webview2\\1.0.1938.49\\microsoft.web.webview2.1.0.1938.49.nupkg.sha512",
+    "C:\\Users\\igneo\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\8.0.26\\microsoft.netcore.app.runtime.win-x64.8.0.26.nupkg.sha512",
+    "C:\\Users\\igneo\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x86\\8.0.26\\microsoft.netcore.app.runtime.win-x86.8.0.26.nupkg.sha512",
+    "C:\\Users\\igneo\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\8.0.26\\microsoft.windowsdesktop.app.runtime.win-x64.8.0.26.nupkg.sha512",
+    "C:\\Users\\igneo\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x86\\8.0.26\\microsoft.windowsdesktop.app.runtime.win-x86.8.0.26.nupkg.sha512",
+    "C:\\Users\\igneo\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\8.0.26\\microsoft.aspnetcore.app.runtime.win-x64.8.0.26.nupkg.sha512",
+    "C:\\Users\\igneo\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x86\\8.0.26\\microsoft.aspnetcore.app.runtime.win-x86.8.0.26.nupkg.sha512"
+  ],
+  "logs": []
+}

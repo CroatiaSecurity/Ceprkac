@@ -1,5 +1,10 @@
 @echo off
-echo Building Ceprkac v0.6.5.0...
+setlocal
+cd /d "%~dp0"
+
+set "VERSION=0.6.5.0"
+
+echo Building Ceprkac v%VERSION%...
 echo.
 
 echo Step 1: Publishing application...
@@ -12,12 +17,13 @@ copy /Y Ceprkac.ico bin\publish\
 
 echo.
 echo Step 3: Building installer...
+REM Inno Setup outputs to releases\%VERSION%\ (defined in Ceprkac.iss OutputDir)
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Ceprkac.iss
 if errorlevel 1 goto error
 
 echo.
 echo Build complete!
-echo Output: releases\0.6.5.0\Ceprkac-0.6.5.0-Setup.exe
+echo Output: releases\%VERSION%\Ceprkac-%VERSION%-Setup.exe
 goto end
 
 :error
