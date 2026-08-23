@@ -19,7 +19,10 @@ if exist bin\publish\runtimes\win-x64\native\WebView2Loader.dll copy /Y bin\publ
 echo.
 echo Step 3: Building installer...
 REM Inno Setup outputs to releases\%VERSION%\ (defined in Ceprkac.iss OutputDir)
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Ceprkac.iss
+set "ISCC=C:\Program Files\Inno Setup 7\ISCC.exe"
+if not exist "%ISCC%" set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+if not exist "%ISCC%" set "ISCC=C:\Program Files\Inno Setup 6\ISCC.exe"
+"%ISCC%" Ceprkac.iss
 if errorlevel 1 goto error
 
 echo.

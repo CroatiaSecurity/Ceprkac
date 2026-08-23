@@ -29,10 +29,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "bin\publish\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "bin\publish\{#MyAppExeName}.config"; DestDir: "{app}"; Flags: ignoreversion
+Source: "bin\publish\{#MyAppExeName}.config"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "bin\publish\{#MyAppIcon}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "bin\publish\*.dll"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
-Source: "bin\publish\*.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "bin\publish\*.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "bin\publish\blocklist.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
