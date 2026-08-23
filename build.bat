@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-set "VERSION=0.6.8"
+set "VERSION=0.6.9"
 
 echo Building Ceprkac v%VERSION%...
 echo.

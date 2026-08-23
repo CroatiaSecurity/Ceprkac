@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.9 — 2026-08-23
+
+Installer: `Ceprkac-0.6.9-Setup.exe`
+
+### Forums (TeamOS / XenForo)
+
+- Thread pages no longer render as a blank dark view. The generic ad hider was matching XenForo layout (`<article>` posts, `.promoted`, `[class*="ad_"]`, `[class*="sponsor"]`) and deleting the whole page after the title loaded.
+- Cosmetic hiding and the fetch/XHR patch are skipped on XenForo and Discourse.
+- Social-site “promoted/sponsored” scrapers only run on Reddit, Facebook, X, and Instagram.
+
+### Address bar / passwords
+
+- Saved passwords no longer scan every page on that domain and then report “No login fields detected” on threads.
+
+---
+
 ## 0.6.8 — 2026-08-23
 
 Installer: `Ceprkac-0.6.8-Setup.exe`

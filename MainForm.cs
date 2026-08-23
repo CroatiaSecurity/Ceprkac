@@ -2949,15 +2949,22 @@ namespace Ceprkac
         private const string AdElementHiderJs = @"(function() {
             if (window.__ceprkacAdHider) return;
             window.__ceprkacAdHider = true;
+            /* XenForo / Discourse: generic ad CSS and <article> scrapers blank the whole page. */
+            var root = document.documentElement;
+            if (root && (root.id === 'XF' || root.getAttribute('data-app') === 'public'
+                || document.querySelector('.p-pageWrapper, [data-xf-init], #d-splash, .d-header')))
+                return;
+
+            var host = (location.hostname || '').toLowerCase();
 
             /* CSS-based hiding — catches ads before JS runs */
             var css = document.createElement('style');
             css.textContent = [
                 'ins.adsbygoogle','[id*=""google_ads""]','[class*=""ad-slot""]','[class*=""advert""]',
                 '[class*=""ad-banner""]','[class*=""ad-container""]','[class*=""ad-wrapper""]',
-                '[class*=""sponsor""]','[class*=""ad-placement""]','[class*=""ad_""]',
-                '[data-ad]','[data-adunit]','[data-ad-slot]','[data-google-query-id]',
-                '.sponsored-content','.promoted','.ad-banner','.ad-container','.ad-wrapper',
+                '[class*=""ad-placement""]',
+                '[data-adunit]','[data-ad-slot]','[data-google-query-id]',
+                '.sponsored-content','.ad-banner','.ad-container','.ad-wrapper',
                 '.native-ad','.ad-unit','.ad-zone','.ad-area','.ad-block','.ad-box','.ad-frame',
                 '.ad-header','.ad-footer','.ad-leaderboard','.ad-sidebar','.ad-skyscraper',
                 '.ad-rectangle','.ad-interstitial','.ad-overlay','.ad-popup','.ad-modal',
@@ -2980,8 +2987,7 @@ namespace Ceprkac
                 'iframe[src*=""trafficjunky""]','iframe[src*=""adsrv""]',
                 'iframe[src*=""juicyads""]','iframe[src*=""exosrv""]',
                 'iframe[src*=""tsyndicate""]','iframe[src*=""realsrv""]',
-                'div[class*=""abovePlayer""]','div[id*=""adblock""]',
-                '.removeAdMessage','#removeAdblockContainer',
+                'div[class*=""abovePlayer""]',
                 /* DuckDuckGo sponsored results and self-promo */
                 '.result--ad','.is-ad','[data-testid=""ad""]','[data-testid=""result--ad""]',
                 '.badge--ad','.result__extras__url--ad',
@@ -3021,10 +3027,10 @@ namespace Ceprkac
                 'iframe[src*=""googletagmanager""]','iframe[id*=""google_ads""]','iframe[id*=""aswift""]',
                 'iframe[src*=""ad""][width]','iframe[data-ad]',
                 '[id*=""google_ads""]','[class*=""ad-slot""]','[class*=""advert""]','[class*=""ad-banner""]',
-                '[class*=""ad-container""]','[class*=""ad-wrapper""]','[class*=""sponsor""]',
-                '[class*=""ad-placement""]','[class*=""ad_""]',
-                '[data-ad]','[data-adunit]','[data-ad-slot]','[data-google-query-id]',
-                '.sponsored-content','.promoted','.ad-banner','.ad-container','.ad-wrapper',
+                '[class*=""ad-container""]','[class*=""ad-wrapper""]',
+                '[class*=""ad-placement""]',
+                '[data-adunit]','[data-ad-slot]','[data-google-query-id]',
+                '.sponsored-content','.ad-banner','.ad-container','.ad-wrapper',
                 '.native-ad','.ad-unit','.ad-zone','.ad-area','.ad-block','.ad-box','.ad-frame',
                 '.ad-header','.ad-footer','.ad-leaderboard','.ad-sidebar','.ad-skyscraper',
                 '.ad-rectangle','.ad-interstitial','.ad-overlay','.ad-popup','.ad-modal',
@@ -3066,46 +3072,51 @@ namespace Ceprkac
                         }
                     } catch(e) {}
                 }
-                /* Reddit: walk feed posts and remove promoted ones */
-                try {
-                    document.querySelectorAll('article, [data-testid=""post-container""], .thing').forEach(function(post) {
-                        var badges = post.querySelectorAll('span, faceplate-tracker, [slot=""credit-bar""], .tagline');
-                        for (var k = 0; k < badges.length; k++) {
-                            var text = (badges[k].textContent || '').trim().toLowerCase();
-                            if (text === 'promoted' || text === 'sponsored') { post.remove(); break; }
-                        }
-                    });
-                    document.querySelectorAll('shreddit-post').forEach(function(post) {
-                        if (post.hasAttribute('is-promoted') || post.getAttribute('post-type') === 'promoted') post.remove();
-                    });
-                } catch(e) {}
-                /* Facebook: hide sponsored articles */
-                try {
-                    document.querySelectorAll('div[role=""article""], div[role=""feed""] > div').forEach(function(article) {
-                        var spans = article.querySelectorAll('span');
-                        for (var k = 0; k < spans.length; k++) {
-                            if ((spans[k].textContent || '').trim().toLowerCase() === 'sponsored') {
-                                article.style.display = 'none'; break;
+                /* Reddit / Facebook / X / Instagram only — XenForo posts are <article> */
+                if (/(^|\.)reddit\.com$|(^|\.)redditmedia\.com$/.test(host)) {
+                    try {
+                        document.querySelectorAll('article, [data-testid=""post-container""], .thing').forEach(function(post) {
+                            var badges = post.querySelectorAll('span, faceplate-tracker, [slot=""credit-bar""], .tagline');
+                            for (var k = 0; k < badges.length; k++) {
+                                var text = (badges[k].textContent || '').trim().toLowerCase();
+                                if (text === 'promoted' || text === 'sponsored') { post.remove(); break; }
                             }
-                        }
-                    });
-                } catch(e) {}
-                /* Twitter/X: hide promoted tweets */
-                try {
-                    document.querySelectorAll('article, [data-testid=""placementTracking""]').forEach(function(el) {
-                        var text = (el.textContent || '').toLowerCase();
-                        if (/\bpromoted\b/.test(text) || /\bad\s*·/.test(text) || el.matches('[data-testid=""placementTracking""]')) {
-                            el.style.display = 'none';
-                        }
-                    });
-                } catch(e) {}
-                /* Instagram: hide sponsored posts */
-                try {
-                    document.querySelectorAll('article').forEach(function(a) {
-                        if (/\bsponsored\b/i.test(a.textContent || '')) a.style.display = 'none';
-                    });
-                    document.querySelectorAll('[data-testid=""reel-ad""]').forEach(function(el) { el.remove(); });
-                } catch(e) {}
+                        });
+                        document.querySelectorAll('shreddit-post').forEach(function(post) {
+                            if (post.hasAttribute('is-promoted') || post.getAttribute('post-type') === 'promoted') post.remove();
+                        });
+                    } catch(e) {}
+                }
+                if (/(^|\.)facebook\.com$|(^|\.)fb\.com$/.test(host)) {
+                    try {
+                        document.querySelectorAll('div[role=""article""], div[role=""feed""] > div').forEach(function(article) {
+                            var spans = article.querySelectorAll('span');
+                            for (var k = 0; k < spans.length; k++) {
+                                if ((spans[k].textContent || '').trim().toLowerCase() === 'sponsored') {
+                                    article.style.display = 'none'; break;
+                                }
+                            }
+                        });
+                    } catch(e) {}
+                }
+                if (/(^|\.)twitter\.com$|(^|\.)x\.com$/.test(host)) {
+                    try {
+                        document.querySelectorAll('article, [data-testid=""placementTracking""]').forEach(function(el) {
+                            var text = (el.textContent || '').toLowerCase();
+                            if (/\bpromoted\b/.test(text) || /\bad\s*·/.test(text) || el.matches('[data-testid=""placementTracking""]')) {
+                                el.style.display = 'none';
+                            }
+                        });
+                    } catch(e) {}
+                }
+                if (/(^|\.)instagram\.com$/.test(host)) {
+                    try {
+                        document.querySelectorAll('article').forEach(function(a) {
+                            if (/\bsponsored\b/i.test(a.textContent || '')) a.style.display = 'none';
+                        });
+                        document.querySelectorAll('[data-testid=""reel-ad""]').forEach(function(el) { el.remove(); });
+                    } catch(e) {}
+                }
             }
             scrub();
             setInterval(scrub, 1500);
@@ -3271,6 +3282,14 @@ namespace Ceprkac
                 if (pageHost == "www.youtube.com" || pageHost == "youtube.com" ||
                     pageHost == "m.youtube.com" || pageHost == "music.youtube.com" ||
                     pageHost.EndsWith(".youtube.com"))
+                    return;
+            }
+            catch { }
+            try
+            {
+                var xf = await core.ExecuteScriptAsync(
+                    "(document.documentElement&&(document.documentElement.id==='XF'||document.documentElement.getAttribute('data-app')==='public'||!!document.querySelector('.p-pageWrapper,[data-xf-init]')))");
+                if (xf != null && xf.IndexOf("true", StringComparison.OrdinalIgnoreCase) >= 0)
                     return;
             }
             catch { }
@@ -3465,6 +3484,7 @@ namespace Ceprkac
             bool isLoginPage = pathLower.Contains("login") || pathLower.Contains("signin") || pathLower.Contains("sign-in")
                 || pathLower.Contains("auth") || pathLower.Contains("account") || pathLower.Contains("sso")
                 || pathLower.Contains("register") || pathLower.Contains("signup") || pathLower.Contains("sign-up");
+            if (!isLoginPage) return;
 
             // Retry up to 6 times with increasing delays for SPA pages
             for (int attempt = 0; attempt < 6; attempt++)
