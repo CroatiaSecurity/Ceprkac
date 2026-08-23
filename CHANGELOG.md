@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.0 — 2026-08-24
+
+Installer: `Ceprkac-0.7.0-Setup.exe`
+
+Milestone build of the WebView2 browser: default-browser registration, reliable new-tab typing, YouTube ads, and forums that were blank or blocked.
+
+### Default browser
+- Registers http / https / HTML so Ceprkac appears in Windows Settings → Default apps.
+- Installer checkbox and menu **Set as Default Browser...** (Windows still requires one confirmation).
+- Single-instance: links open a tab in the running window (`Ceprkac.exe https://example.com`).
+
+### Address bar
+- New-tab search keeps the first character (`cakes` no longer becomes `akes`).
+- Keys are caught before WebView2; homepage/URL updates do not overwrite what you already typed.
+
+### YouTube
+- Prerolls and feed ads are stripped in the page main world before YouTube’s scripts run.
+- DevTools injection is armed only when that tab opens YouTube.
+
+### Forums and other pages
+- XenForo / TeamOS threads are not wiped by the generic ad hider.
+- SmartScreen URL checks are off (same as GBrowser / Chrome).
+- Cloudflare challenge pages are not treated as a bot via global DevTools scripts.
+- Failed loads show the error in the status bar.
+
+---
+
 ## 0.6.10 — 2026-08-23
 
 Installer: `Ceprkac-0.6.10-Setup.exe`
