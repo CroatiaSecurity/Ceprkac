@@ -504,13 +504,13 @@ namespace Ceprkac
             menuBtn = new ToolStripDropDownButton("≡") { ForeColor = Color.White, Font = new Font("Segoe UI", 12f), AutoSize = false, Width = 36, ShowDropDownArrow = false, Overflow = ToolStripItemOverflow.Never };
             menuBtn.DropDown.BackColor = Theme.ActiveTab;
             menuBtn.DropDown.ForeColor = Color.White;
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("New Tab", null, (_, _) => AddNewTab(homePageUrl)) { ShortcutKeys = Keys.Control | Keys.T, ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reopen Closed Tab", null, (_, _) => RestoreClosedTab()) { ShortcutKeys = Keys.Control | Keys.Shift | Keys.T, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("New Tab", null, (_, _) => AddNewTab(homePageUrl)) { ShortcutKeyDisplayString = "Ctrl+T", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reopen Closed Tab", null, (_, _) => RestoreClosedTab()) { ShortcutKeyDisplayString = "Ctrl+Shift+T", ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuBtn.DropDownItems.Add(new ToolStripSeparator());
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Find in Page...", null, (_, _) => ToggleFindBar()) { ShortcutKeys = Keys.Control | Keys.F, ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom In", null, (_, _) => ZoomBy(0.1)) { ShortcutKeys = Keys.Control | Keys.Oemplus, ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom Out", null, (_, _) => ZoomBy(-0.1)) { ShortcutKeys = Keys.Control | Keys.OemMinus, ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reset Zoom", null, (_, _) => ZoomReset()) { ShortcutKeys = Keys.Control | Keys.D0, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Find in Page...", null, (_, _) => ToggleFindBar()) { ShortcutKeyDisplayString = "Ctrl+F", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom In", null, (_, _) => ZoomBy(0.1)) { ShortcutKeyDisplayString = "Ctrl+Plus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom Out", null, (_, _) => ZoomBy(-0.1)) { ShortcutKeyDisplayString = "Ctrl+Minus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reset Zoom", null, (_, _) => ZoomReset()) { ShortcutKeyDisplayString = "Ctrl+0", ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuBtn.DropDownItems.Add(new ToolStripSeparator());
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("Add Bookmark", null, (_, _) => AddCurrentPageBookmark()) { ShortcutKeys = Keys.Control | Keys.D, ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("Import Bookmarks...", null, (_, _) => ImportBookmarksHtml()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
@@ -583,6 +583,7 @@ namespace Ceprkac
 
             KeyPreview = true;
             KeyDown += MainForm_KeyDown;
+            KeyPress += MainForm_KeyPress;
             Load += (_, _) => InitializeAsync();
             FormClosing += (_, _) => { SaveWindowState(); moduleCleaner?.Stop(); };
         }
@@ -604,6 +605,12 @@ namespace Ceprkac
             else if (e.Control && (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)) { ZoomBy(-0.1); e.Handled = true; }
             else if (e.Control && (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0)) { ZoomReset(); e.Handled = true; }
             else if (e.KeyCode == Keys.Escape && findBar.Visible) { findBar.Visible = false; e.Handled = true; }
+            else if (e.KeyCode == Keys.Escape && ActiveTab?.FocusOmnibox == true)
+            {
+                ActiveTab.FocusOmnibox = false;
+                try { ActiveTab.WebView.Focus(); } catch { }
+                e.Handled = true;
+            }
             else if (e.Control && e.Shift && e.KeyCode == Keys.Tab)
             {
                 if (tabStrip.Tabs.Count > 1) SwitchToTab((tabStrip.SelectedIndex - 1 + tabStrip.Tabs.Count) % tabStrip.Tabs.Count);
@@ -883,18 +890,56 @@ namespace Ceprkac
             addressBox.Text = url;
         }
 
-        private void FocusAddressBar()
+        private void MainForm_KeyPress(object? sender, KeyPressEventArgs e)
+        {
+            var tab = ActiveTab;
+            if (tab == null || !tab.FocusOmnibox || addressBox.Focused) return;
+            if (char.IsControl(e.KeyChar)) return;
+            if (addressBox.SelectionLength == addressBox.Text.Length || !OmniboxHasUserQuery(tab))
+                addressBox.Text = e.KeyChar.ToString();
+            else
+            {
+                int i = addressBox.SelectionStart;
+                addressBox.Text = addressBox.Text.Insert(Math.Max(0, i), e.KeyChar.ToString());
+                addressBox.SelectionStart = i + 1;
+            }
+            FocusAddressBar(selectAll: false);
+            e.Handled = true;
+        }
+
+        private void FocusAddressBar(bool selectAll = true)
         {
             if (addressBox.IsDisposed) return;
+            try { navToolStrip.Focus(); } catch { }
             addressBox.Focus();
-            addressBox.SelectAll();
+            if (selectAll) addressBox.SelectAll();
+            else
+            {
+                addressBox.SelectionLength = 0;
+                addressBox.SelectionStart = addressBox.Text.Length;
+            }
+        }
+
+        private bool OmniboxHasUserQuery(BrowserTab tab)
+        {
+            var text = (addressBox.Text ?? "").Trim();
+            if (text.Length == 0) return false;
+            if (string.Equals(text, tab.Url, StringComparison.OrdinalIgnoreCase)) return false;
+            if (string.Equals(text, homePageUrl, StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
         }
 
         private async void AddNewTab(string url, int? insertAfter = null)
         {
             if (sharedEnvironment == null) return;
-            var webView = new WebView2 { Dock = DockStyle.Fill, Visible = true };
-            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = !string.IsNullOrEmpty(url) };
+            var webView = new WebView2
+            {
+                Dock = DockStyle.Fill,
+                Visible = true,
+                TabStop = false,
+                DefaultBackgroundColor = Theme.ActiveTab,
+            };
+            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = true };
 
             int insertIndex = insertAfter.HasValue ? insertAfter.Value + 1
                 : tabStrip.SelectedIndex >= 0 ? tabStrip.SelectedIndex + 1
@@ -902,8 +947,25 @@ namespace Ceprkac
 
             tabStrip.Tabs.Insert(insertIndex, tab);
             webViewPanel.Controls.Add(webView);
-            webView.BringToFront();
             _ = webView.Handle;
+            webView.GotFocus += (_, _) =>
+            {
+                if (!tab.FocusOmnibox) return;
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (IsDisposed || !tab.FocusOmnibox || ActiveTab != tab) return;
+                        FocusAddressBar(selectAll: !OmniboxHasUserQuery(tab));
+                    }));
+                }
+                catch { }
+            };
+
+            // Focus the omnibox immediately so the first typed character is not
+            // eaten while WebView2 is still starting (or by the homepage).
+            SwitchToTab(insertIndex);
+            FocusAddressBar(selectAll: true);
 
             try
             {
@@ -944,6 +1006,7 @@ namespace Ceprkac
                         });
                     };
                     core.DownloadStarting += Core_DownloadStarting;
+                    core.ContextMenuRequested += Core_ContextMenuRequested;
                     core.PermissionRequested += Core_PermissionRequested;
                     core.ProcessFailed += (_, e) =>
                     {
@@ -1012,9 +1075,8 @@ namespace Ceprkac
                     // Ad blocker — network-level request blocking
                     SetupAdBlocker(core);
                 }
-                SwitchToTab(insertIndex);
-                if (!string.IsNullOrWhiteSpace(url)) NavigateTab(tab, url);
-                if (tab.FocusOmnibox) FocusAddressBar();
+                if (!string.IsNullOrWhiteSpace(tab.Url)) NavigateTab(tab, tab.Url);
+                if (tab.FocusOmnibox) FocusAddressBar(selectAll: !OmniboxHasUserQuery(tab));
             }
             catch (Exception ex)
             {
@@ -1026,18 +1088,23 @@ namespace Ceprkac
         private void SwitchToTab(int index)
         {
             if (index < 0 || index >= tabStrip.Tabs.Count) return;
-            if (tabStrip.SelectedIndex >= 0 && tabStrip.SelectedIndex < tabStrip.Tabs.Count)
-                tabStrip.Tabs[tabStrip.SelectedIndex].WebView.Visible = false;
+            if (tabStrip.SelectedIndex >= 0 && tabStrip.SelectedIndex < tabStrip.Tabs.Count && tabStrip.SelectedIndex != index)
+            {
+                var prev = tabStrip.Tabs[tabStrip.SelectedIndex];
+                prev.FocusOmnibox = false;
+                prev.WebView.Visible = false;
+            }
             tabStrip.SelectedIndex = index;
             var tab = tabStrip.Tabs[index];
             tab.WebView.Visible = true;
             tab.WebView.BringToFront();
             try { tab.WebView.ZoomFactor = tab.ZoomFactor; } catch { }
-            SetAddressText(tab.Url);
+            if (!(tab.FocusOmnibox && addressBox.Focused && OmniboxHasUserQuery(tab)))
+                SetAddressText(tab.Url);
             Text = tab.Title + " - Ceprkac";
             UpdateTabState(tab);
             tabStrip.Invalidate();
-            if (tab.FocusOmnibox) FocusAddressBar();
+            if (tab.FocusOmnibox) FocusAddressBar(selectAll: !OmniboxHasUserQuery(tab));
             else tab.WebView.Focus();
         }
 
@@ -1144,7 +1211,7 @@ namespace Ceprkac
         private async Task<WebView2?> CreateTabForNewWindow(int? insertAfter)
         {
             if (sharedEnvironment == null) return null;
-            var webView = new WebView2 { Dock = DockStyle.Fill, Visible = true };
+            var webView = new WebView2 { Dock = DockStyle.Fill, Visible = true, TabStop = false, DefaultBackgroundColor = Theme.ActiveTab };
             var tab = new BrowserTab { Url = "", WebView = webView, IsPopup = true };
             int insertIndex = insertAfter.HasValue ? insertAfter.Value + 1 : tabStrip.Tabs.Count;
             tabStrip.Tabs.Insert(insertIndex, tab);
@@ -1161,6 +1228,7 @@ namespace Ceprkac
                 core.SourceChanged += (_, _) => { tab.Url = core.Source ?? ""; if (ActiveTab == tab && !addressBox.Focused) SetAddressText(tab.Url); };
                 core.WindowCloseRequested += (_, _) => { int ti = tabStrip.Tabs.IndexOf(tab); if (ti >= 0) CloseTab(ti); };
                 core.DownloadStarting += Core_DownloadStarting;
+                core.ContextMenuRequested += Core_ContextMenuRequested;
                 core.PermissionRequested += Core_PermissionRequested;
                 SetupAdBlocker(core);
                 _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
@@ -1229,7 +1297,8 @@ namespace Ceprkac
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
             tab.WebView.CoreWebView2?.Navigate(uri.ToString());
             tab.Url = uri.ToString();
-            if (ActiveTab == tab) SetAddressText(uri.ToString());
+            if (ActiveTab == tab && !addressBox.Focused)
+                SetAddressText(uri.ToString());
             AddToHistory(uri.ToString());
         }
 
@@ -1252,22 +1321,297 @@ namespace Ceprkac
 
         private void Core_DownloadStarting(object? sender, CoreWebView2DownloadStartingEventArgs e)
         {
-            var filename = Path.GetFileName(e.ResultFilePath) ?? "download";
-            using var dialog = new SaveFileDialog { FileName = filename, Filter = "All Files|*.*", Title = "Save Download", RestoreDirectory = true };
-            if (dialog.ShowDialog(this) != DialogResult.OK) { e.Cancel = true; statusLabel.Text = "Download canceled."; return; }
-            e.ResultFilePath = dialog.FileName;
+            // Hide WebView2's default save UI (often suggests a dummy "aaaa" name for
+            // Save image as) and defer until our dialog has actually set the path.
+            e.Handled = true;
+            var deferral = e.GetDeferral();
+            var op = e.DownloadOperation;
+            void Prompt()
+            {
+                try
+                {
+                    if (IsDisposed) { e.Cancel = true; return; }
+                    var filename = SuggestDownloadFileName(e.ResultFilePath, op.Uri);
+                    using var dialog = new SaveFileDialog
+                    {
+                        FileName = filename,
+                        Filter = "All Files|*.*",
+                        Title = "Save Download",
+                        RestoreDirectory = true,
+                        OverwritePrompt = true,
+                    };
+                    try
+                    {
+                        var dir = Path.GetDirectoryName(e.ResultFilePath);
+                        if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                            dialog.InitialDirectory = dir;
+                    }
+                    catch { }
+                    if (dialog.ShowDialog(this) != DialogResult.OK)
+                    {
+                        e.Cancel = true;
+                        statusLabel.Text = "Download canceled.";
+                        return;
+                    }
+                    e.ResultFilePath = dialog.FileName;
+                    WatchWebViewDownload(op, dialog.FileName);
+                }
+                catch (Exception ex)
+                {
+                    e.Cancel = true;
+                    statusLabel.Text = "Download failed.";
+                    try { MessageBox.Show(this, ex.Message, "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Error); } catch { }
+                }
+                finally
+                {
+                    deferral.Complete();
+                }
+            }
+            try
+            {
+                if (!IsHandleCreated || IsDisposed) { e.Cancel = true; deferral.Complete(); return; }
+                BeginInvoke(new Action(Prompt));
+            }
+            catch
+            {
+                e.Cancel = true;
+                deferral.Complete();
+            }
+        }
+
+        // "Save image as" (and save link/media as) shows Chromium's file picker
+        // *before* DownloadStarting. That first pick is discarded, then we would
+        // prompt again with WebView2's dummy "aaaa" name. Replace those items so
+        // only our dialog runs and the file is actually written.
+        private void Core_ContextMenuRequested(object? sender, CoreWebView2ContextMenuRequestedEventArgs e)
+        {
+            if (sharedEnvironment == null) return;
+            var core = sender as CoreWebView2;
+            if (core == null) return;
+            string sourceUri = "";
+            string linkUri = "";
+            try
+            {
+                var target = e.ContextMenuTarget;
+                if (target.HasSourceUri) sourceUri = target.SourceUri ?? "";
+                if (target.HasLinkUri) linkUri = target.LinkUri ?? "";
+            }
+            catch { }
+            ReplaceNativeSaveAs(e.MenuItems, "saveImageAs", core, sourceUri);
+            ReplaceNativeSaveAs(e.MenuItems, "saveVideoAs", core, sourceUri);
+            ReplaceNativeSaveAs(e.MenuItems, "saveAudioAs", core, sourceUri);
+            ReplaceNativeSaveAs(e.MenuItems, "saveLinkAs", core, linkUri);
+        }
+
+        private void ReplaceNativeSaveAs(IList<CoreWebView2ContextMenuItem> items, string name, CoreWebView2 core, string uri)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                var it = items[i];
+                if (it.Kind == CoreWebView2ContextMenuItemKind.Submenu)
+                {
+                    try { ReplaceNativeSaveAs(it.Children, name, core, uri); } catch { }
+                    continue;
+                }
+                if (!string.Equals(it.Name, name, StringComparison.Ordinal)) continue;
+                if (string.IsNullOrWhiteSpace(uri) || sharedEnvironment == null) break;
+                try
+                {
+                    var custom = sharedEnvironment.CreateContextMenuItem(it.Label, null, CoreWebView2ContextMenuItemKind.Command);
+                    var capturedCore = core;
+                    var capturedUri = uri;
+                    custom.CustomItemSelected += (_, _) =>
+                    {
+                        try { BeginInvoke(new Action(() => { _ = SaveUrlWithDialogAsync(capturedCore, capturedUri); })); }
+                        catch { }
+                    };
+                    items.RemoveAt(i);
+                    items.Insert(i, custom);
+                }
+                catch { }
+                break;
+            }
+        }
+
+        private async Task SaveUrlWithDialogAsync(CoreWebView2 core, string uri)
+        {
+            if (string.IsNullOrWhiteSpace(uri) || IsDisposed) return;
+            var filename = SuggestDownloadFileName("", uri);
+            if (string.IsNullOrEmpty(Path.GetExtension(filename)))
+            {
+                var ext = GuessExtensionFromUri(uri);
+                filename += ext.Length > 0 ? ext : ".jpg";
+            }
+            using var dialog = new SaveFileDialog
+            {
+                FileName = filename,
+                Filter = "All Files|*.*",
+                Title = "Save Download",
+                RestoreDirectory = true,
+                OverwritePrompt = true,
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                statusLabel.Text = "Download canceled.";
+                return;
+            }
             var item = new DownloadItem
             {
                 Filename = Path.GetFileName(dialog.FileName),
                 Path = dialog.FileName,
-                Url = e.DownloadOperation.Uri ?? "",
+                Url = uri,
                 Status = "Downloading",
             };
             downloads.Add(item);
             if (downloads.Count > 40) downloads.RemoveRange(0, downloads.Count - 40);
             statusLabel.Text = $"Downloading {item.Filename}…";
             RefreshDownloadsButton();
-            var op = e.DownloadOperation;
+            try
+            {
+                await DownloadUriToFileAsync(core, uri, dialog.FileName, item);
+                item.Status = "Complete";
+                if (item.Total <= 0) item.Total = item.Received;
+                statusLabel.Text = $"Download complete: {item.Filename}";
+            }
+            catch (Exception ex)
+            {
+                item.Status = "Interrupted";
+                statusLabel.Text = $"Download interrupted: {item.Filename}";
+                try { MessageBox.Show(this, $"Could not save file:\r\n{ex.Message}", "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Error); } catch { }
+            }
+            SaveDownloads();
+            RefreshDownloadsButton();
+        }
+
+        private async Task DownloadUriToFileAsync(CoreWebView2 core, string uri, string dest, DownloadItem item)
+        {
+            if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteDataUriToFile(uri, dest);
+                item.Received = item.Total = new FileInfo(dest).Length;
+                return;
+            }
+            if (uri.StartsWith("blob:", StringComparison.OrdinalIgnoreCase))
+            {
+                await WriteBlobUriToFileAsync(core, uri, dest);
+                item.Received = item.Total = new FileInfo(dest).Length;
+                return;
+            }
+            if (uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(new Uri(uri).LocalPath, dest, overwrite: true);
+                item.Received = item.Total = new FileInfo(dest).Length;
+                return;
+            }
+
+            string? ua = null;
+            try
+            {
+                var raw = await core.ExecuteScriptAsync("navigator.userAgent");
+                ua = JsonSerializer.Deserialize<string>(raw);
+            }
+            catch { }
+
+            var cookieParts = new List<string>();
+            try
+            {
+                foreach (var c in await core.CookieManager.GetCookiesAsync(uri))
+                    cookieParts.Add(c.Name + "=" + c.Value);
+            }
+            catch { }
+
+            using var handler = new HttpClientHandler
+            {
+                UseCookies = false,
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+            };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
+            using var req = new HttpRequestMessage(HttpMethod.Get, uri);
+            if (!string.IsNullOrEmpty(ua))
+                req.Headers.TryAddWithoutValidation("User-Agent", ua);
+            try
+            {
+                var referer = core.Source;
+                if (!string.IsNullOrEmpty(referer) && referer.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                    req.Headers.TryAddWithoutValidation("Referer", referer);
+            }
+            catch { }
+            if (cookieParts.Count > 0)
+                req.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookieParts));
+            req.Headers.TryAddWithoutValidation("Accept", "*/*");
+
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            resp.EnsureSuccessStatusCode();
+            if (resp.Content.Headers.ContentLength is long len && len > 0)
+                item.Total = len;
+
+            var dir = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            using var input = await resp.Content.ReadAsStreamAsync();
+            using var output = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None);
+            var buffer = new byte[81920];
+            int read;
+            while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                await output.WriteAsync(buffer, 0, read);
+                item.Received += read;
+                var copy = item;
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (copy.Status != "Downloading") return;
+                        statusLabel.Text = copy.Total > 0
+                            ? $"Downloading {copy.Filename}: {copy.Received:N0} / {copy.Total:N0}"
+                            : $"Downloading {copy.Filename}: {copy.Received:N0}";
+                    }));
+                }
+                catch { }
+            }
+        }
+
+        private static void WriteDataUriToFile(string uri, string dest)
+        {
+            int comma = uri.IndexOf(',');
+            if (comma < 0) throw new InvalidOperationException("Invalid data URL.");
+            var meta = uri.Substring(0, comma);
+            var payload = uri.Substring(comma + 1);
+            byte[] bytes = meta.IndexOf("base64", StringComparison.OrdinalIgnoreCase) >= 0
+                ? Convert.FromBase64String(payload)
+                : Encoding.UTF8.GetBytes(Uri.UnescapeDataString(payload));
+            var dir = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllBytes(dest, bytes);
+        }
+
+        private static async Task WriteBlobUriToFileAsync(CoreWebView2 core, string uri, string dest)
+        {
+            var escaped = uri.Replace("\\", "\\\\").Replace("'", "\\'");
+            var script = "(async()=>{const r=await fetch('" + escaped + "');const b=new Uint8Array(await r.arrayBuffer());let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s);})()";
+            var json = await core.ExecuteScriptAsync(script);
+            if (string.IsNullOrWhiteSpace(json) || json == "null")
+                throw new InvalidOperationException("Could not read image data from the page.");
+            var b64 = JsonSerializer.Deserialize<string>(json);
+            if (string.IsNullOrEmpty(b64))
+                throw new InvalidOperationException("Could not read image data from the page.");
+            var dir = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllBytes(dest, Convert.FromBase64String(b64));
+        }
+
+        private void WatchWebViewDownload(CoreWebView2DownloadOperation op, string path)
+        {
+            var item = new DownloadItem
+            {
+                Filename = Path.GetFileName(path),
+                Path = path,
+                Url = op.Uri ?? "",
+                Status = "Downloading",
+            };
+            downloads.Add(item);
+            if (downloads.Count > 40) downloads.RemoveRange(0, downloads.Count - 40);
+            statusLabel.Text = $"Downloading {item.Filename}…";
+            RefreshDownloadsButton();
             op.BytesReceivedChanged += (_, _) => BeginInvoke(() =>
             {
                 if (item.Status != "Downloading") return;
@@ -1295,6 +1639,73 @@ namespace Ceprkac
                     RefreshDownloadsButton();
                 }
             });
+        }
+
+        private static string SuggestDownloadFileName(string? resultFilePath, string? uri)
+        {
+            var name = "";
+            try { name = Path.GetFileName(resultFilePath ?? ""); } catch { }
+            if (!string.IsNullOrWhiteSpace(name) && !IsPlaceholderDownloadName(name))
+                return SanitizeFileName(name);
+
+            string fromUri = "";
+            if (!string.IsNullOrWhiteSpace(uri))
+            {
+                try { fromUri = Path.GetFileName(new Uri(uri).LocalPath); } catch { }
+            }
+            fromUri = SanitizeFileName(fromUri);
+            if (!string.IsNullOrWhiteSpace(fromUri) && fromUri.IndexOf('.') >= 0 && !IsPlaceholderDownloadName(fromUri)
+                && fromUri.Length > 2
+                && !fromUri.Equals("images", StringComparison.OrdinalIgnoreCase)
+                && !fromUri.Equals("image", StringComparison.OrdinalIgnoreCase)
+                && !fromUri.Equals("img", StringComparison.OrdinalIgnoreCase))
+                return fromUri;
+
+            var ext = GuessExtensionFromUri(uri);
+            if (!string.IsNullOrWhiteSpace(fromUri) && fromUri.Length > 1 && !IsPlaceholderDownloadName(fromUri))
+                return fromUri + ext;
+            return (ext.Length > 0 ? "image" + ext : "download");
+        }
+
+        private static bool IsPlaceholderDownloadName(string fileName)
+        {
+            var stem = Path.GetFileNameWithoutExtension(fileName ?? "").Trim();
+            if (stem.Length == 0) return true;
+            return stem.Equals("aaaa", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GuessExtensionFromUri(string? uri)
+        {
+            if (string.IsNullOrWhiteSpace(uri)) return "";
+            var lower = uri.ToLowerInvariant();
+            if (lower.StartsWith("data:image/png", StringComparison.Ordinal)) return ".png";
+            if (lower.StartsWith("data:image/jpeg", StringComparison.Ordinal) || lower.StartsWith("data:image/jpg", StringComparison.Ordinal)) return ".jpg";
+            if (lower.StartsWith("data:image/gif", StringComparison.Ordinal)) return ".gif";
+            if (lower.StartsWith("data:image/webp", StringComparison.Ordinal)) return ".webp";
+            if (lower.StartsWith("data:image/svg", StringComparison.Ordinal)) return ".svg";
+            if (lower.Contains(".png")) return ".png";
+            if (lower.Contains(".webp")) return ".webp";
+            if (lower.Contains(".gif")) return ".gif";
+            if (lower.Contains(".jpg") || lower.Contains(".jpeg")) return ".jpg";
+            if (lower.Contains(".svg")) return ".svg";
+            if (lower.Contains(".mp4")) return ".mp4";
+            if (lower.Contains(".webm")) return ".webm";
+            if (lower.Contains(".pdf")) return ".pdf";
+            if (lower.Contains("gstatic.com") || lower.Contains("googleusercontent.com") || lower.Contains("ggpht.com")
+                || lower.Contains("/image") || lower.Contains("=image") || lower.Contains("tbn:"))
+                return ".jpg";
+            return "";
+        }
+
+        private static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+            foreach (var c in Path.GetInvalidFileNameChars())
+                name = name.Replace(c, '_');
+            name = name.Trim().Trim('.');
+            if (name.Length == 0 || name == "." || name == "..") return "";
+            if (name.Length > 120) name = name.Substring(0, 120);
+            return name;
         }
 
         private void RefreshDownloadsButton()

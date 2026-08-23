@@ -14,12 +14,14 @@ namespace Ceprkac
     /// mapped — including at process start. Infectors are expected then, so
     /// nothing is grandfathered by a late snapshot.
     ///
-    /// Keep: this exe's directory, Edge WebView2, Windows, .NET.
-    /// Unload: anything else with a resolvable path (Temp, AppData injectors,
-    /// overlays, etc.). Unresolvable paths are skipped so a lookup miss cannot
-    /// FreeLibrary a GPU/codec module.
-    /// After init settles, any brand-new mapping is also unloaded unless it
-    /// belongs to those trees (late WebView2 delay-loads still allowed).
+    /// Keep: this exe's directory, Edge WebView2, Windows, .NET, GPU vendors.
+    /// Unload: Temp / AppData / Downloads overlays in this process and children
+    /// (WebView2 GPU/renderer included). Unresolvable paths are skipped so a
+    /// lookup miss cannot FreeLibrary a GPU/codec module.
+    /// After the host settles, unknown mappings in this process are also
+    /// unloaded unless they belong to those trees. Children keep only the
+    /// Temp/AppData/Downloads rule — freeze-unloading unknown Program Files
+    /// modules from the GPU process blanks the window every few seconds.
     /// </summary>
     internal sealed class InjectedModuleCleaner
     {
@@ -117,6 +119,14 @@ namespace Ceprkac
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\Common Files\Microsoft Shared");
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\dotnet");
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\dotnet");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\NVIDIA Corporation");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\NVIDIA Corporation");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\AMD");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\AMD");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\ATI Technologies");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\ATI Technologies");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\Intel");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\Intel");
             DiscoverEdgeRuntimeFolders(add);
 
             void addUser(string? p)
@@ -290,7 +300,11 @@ namespace Ceprkac
                             continue;
                         }
                         if (NormalizePath(path).Length == 0) continue;
-                        if (IsClearlyForeign(path) || st.Frozen)
+                        // Children (WebView2 GPU/renderer included): unload Temp / AppData /
+                        // Downloads overlays immediately. Do not freeze-unload unknown
+                        // Program Files modules — that unmapped the GPU driver every ~2s
+                        // and blanked the window. Host still freeze-unloads unknowns.
+                        if (IsClearlyForeign(path))
                             TryUnloadRemote(h, mh);
                     }
                     UpdateFrozen(ref st.Frozen, ref st.LastCount, ref st.StablePolls, mods.Count);
