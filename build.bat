@@ -2,18 +2,19 @@
 setlocal
 cd /d "%~dp0"
 
-set "VERSION=0.6.5.0"
+set "VERSION=0.6.6"
 
 echo Building Ceprkac v%VERSION%...
 echo.
 
-echo Step 1: Publishing application...
-dotnet publish Ceprkac.csproj -c Release -r win-x64 --self-contained true -o bin\publish
+echo Step 1: Publishing application (framework-dependent net48, small installer)...
+dotnet publish Ceprkac.csproj -c Release -o bin\publish
 if errorlevel 1 goto error
 
 echo.
-echo Step 2: Copying icon...
+echo Step 2: Copying icon and x64 WebView2 loader...
 copy /Y Ceprkac.ico bin\publish\
+if exist bin\publish\runtimes\win-x64\native\WebView2Loader.dll copy /Y bin\publish\runtimes\win-x64\native\WebView2Loader.dll bin\publish\
 
 echo.
 echo Step 3: Building installer...

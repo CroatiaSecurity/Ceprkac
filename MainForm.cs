@@ -6,9 +6,11 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using Microsoft.Win32;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -35,6 +37,45 @@ namespace Ceprkac
         public static readonly Color Border        = Color.FromArgb(60, 64, 67);
     }
 
+    internal sealed class DarkColorTable : ProfessionalColorTable
+    {
+        public override Color ToolStripGradientBegin => Theme.Toolbar;
+        public override Color ToolStripGradientMiddle => Theme.Toolbar;
+        public override Color ToolStripGradientEnd => Theme.Toolbar;
+        public override Color ToolStripBorder => Theme.Toolbar;
+        public override Color ToolStripDropDownBackground => Theme.ActiveTab;
+        public override Color MenuBorder => Theme.Border;
+        public override Color MenuItemBorder => Theme.Border;
+        public override Color MenuItemSelected => Theme.TabHover;
+        public override Color MenuItemSelectedGradientBegin => Theme.TabHover;
+        public override Color MenuItemSelectedGradientEnd => Theme.TabHover;
+        public override Color ImageMarginGradientBegin => Theme.ActiveTab;
+        public override Color ImageMarginGradientMiddle => Theme.ActiveTab;
+        public override Color ImageMarginGradientEnd => Theme.ActiveTab;
+        public override Color SeparatorDark => Theme.Border;
+        public override Color SeparatorLight => Theme.Border;
+        public override Color StatusStripGradientBegin => Theme.StatusBar;
+        public override Color StatusStripGradientEnd => Theme.StatusBar;
+        public override Color ButtonSelectedBorder => Theme.Border;
+        public override Color ButtonSelectedHighlight => Theme.TabHover;
+        public override Color ButtonSelectedGradientBegin => Theme.TabHover;
+        public override Color ButtonSelectedGradientEnd => Theme.TabHover;
+        public override Color OverflowButtonGradientBegin => Theme.Toolbar;
+        public override Color OverflowButtonGradientMiddle => Theme.Toolbar;
+        public override Color OverflowButtonGradientEnd => Theme.Toolbar;
+    }
+
+    internal sealed class DarkToolStripRenderer : ToolStripProfessionalRenderer
+    {
+        public DarkToolStripRenderer() : base(new DarkColorTable()) { RoundedEdges = false; }
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) { }
+        protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+        {
+            using var b = new SolidBrush(e.ToolStrip is StatusStrip ? Theme.StatusBar : e.ToolStrip.BackColor);
+            e.Graphics.FillRectangle(b, e.AffectedBounds);
+        }
+    }
+
     // ───────────────────────── tab data model ───────────────────────────────
     internal sealed class BrowserTab
     {
@@ -42,6 +83,10 @@ namespace Ceprkac
         public string Url { get; set; } = "";
         public WebView2 WebView { get; set; } = null!;
         public bool IsLoading { get; set; }
+        public int LoadProgress { get; set; }
+        public double ZoomFactor { get; set; } = 1.0;
+        public bool IsPopup { get; set; }
+        public bool FocusOmnibox { get; set; }
         public DateTime LastAutoFillAttempt { get; set; } = DateTime.MinValue;
     }
 
@@ -52,6 +97,8 @@ namespace Ceprkac
         public int SelectedIndex { get; set; } = -1;
         public int HoverIndex { get; private set; } = -1;
         public int HoverCloseIndex { get; private set; } = -1;
+        private Point? _dragStart;
+        private int _dragTab = -1;
 
         public event EventHandler<int>? TabClicked;
         public event EventHandler<int>? TabCloseClicked;
@@ -179,13 +226,37 @@ namespace Ceprkac
             if (tab.IsLoading)
             {
                 using var loadPen = new Pen(Theme.Accent, 2);
-                g.DrawLine(loadPen, rect.X + 4, rect.Bottom - 2, rect.X + 4 + (rect.Width - 8) / 3, rect.Bottom - 2);
+                int pw = tab.LoadProgress > 0
+                    ? Math.Max(1, (rect.Width - 8) * Math.Min(tab.LoadProgress, 100) / 100)
+                    : (rect.Width - 8) / 3;
+                g.DrawLine(loadPen, rect.X + 4, rect.Bottom - 2, rect.X + 4 + pw, rect.Bottom - 2);
             }
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            if (_dragStart.HasValue && _dragTab >= 0)
+            {
+                int delta = e.X - _dragStart.Value.X;
+                int tabW = GetTabWidth() + 1;
+                if (Math.Abs(delta) > tabW / 2)
+                {
+                    int dir = delta > 0 ? 1 : -1;
+                    int newIdx = _dragTab + dir;
+                    if (newIdx >= 0 && newIdx < Tabs.Count)
+                    {
+                        (Tabs[_dragTab], Tabs[newIdx]) = (Tabs[newIdx], Tabs[_dragTab]);
+                        if (SelectedIndex == _dragTab) SelectedIndex = newIdx;
+                        else if (SelectedIndex == newIdx) SelectedIndex = _dragTab;
+                        _dragTab = newIdx;
+                        _dragStart = e.Location;
+                        Invalidate();
+                        TabClicked?.Invoke(this, SelectedIndex);
+                    }
+                }
+                return;
+            }
             int oldHover = HoverIndex, oldClose = HoverCloseIndex;
             HoverIndex = -1;
             HoverCloseIndex = -1;
@@ -227,8 +298,31 @@ namespace Ceprkac
         {
             base.OnMouseDown(e);
             if (e.Button == MouseButtons.Middle)
+            {
                 for (int i = 0; i < Tabs.Count; i++)
                     if (GetTabRect(i).Contains(e.Location)) { TabCloseClicked?.Invoke(this, i); return; }
+                return;
+            }
+            if (e.Button == MouseButtons.Left)
+            {
+                for (int i = 0; i < Tabs.Count; i++)
+                {
+                    var rect = GetTabRect(i);
+                    if (rect.Contains(e.Location) && !GetCloseRect(rect).Contains(e.Location))
+                    {
+                        _dragStart = e.Location;
+                        _dragTab = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            _dragStart = null;
+            _dragTab = -1;
         }
 
         private static GraphicsPath RoundedRect(Rectangle r, int radius)
@@ -264,6 +358,16 @@ namespace Ceprkac
         public List<BookmarkNode> Children { get; set; } = new();
     }
 
+    internal sealed class DownloadItem
+    {
+        public string Filename { get; set; } = "";
+        public string Path { get; set; } = "";
+        public string Url { get; set; } = "";
+        public long Received { get; set; }
+        public long Total { get; set; }
+        public string Status { get; set; } = "Downloading";
+    }
+
     // ───────────────────────── main form ────────────────────────────────────
     public class MainForm : Form
     {
@@ -273,15 +377,19 @@ namespace Ceprkac
 
         private readonly ChromeTabStrip tabStrip;
         private readonly ToolStrip navToolStrip;
-        private readonly ToolStripTextBox addressBox;
+        private readonly TextBox addressBox;
+        private readonly ToolStripControlHost addressHost;
         private readonly ToolStripButton goBtn;
         private readonly ToolStripButton backBtn;
         private readonly ToolStripButton fwdBtn;
         private readonly ToolStripButton refreshBtn;
         private readonly ToolStripButton bookmarkBtn;
+        private readonly ToolStripDropDownButton downloadsBtn;
         private readonly ToolStripDropDownButton menuBtn;
         private readonly ToolStrip bookmarksBar;
         private readonly Panel webViewPanel;
+        private readonly Panel findBar;
+        private readonly TextBox findInput;
         private readonly ToolStripStatusLabel statusLabel;
         private readonly StatusStrip statusStrip;
 
@@ -290,18 +398,27 @@ namespace Ceprkac
         private readonly string historyFile;
         private readonly string passwordsFile;
         private readonly string settingsFile;
+        private readonly string downloadsFile;
+        private readonly string configFile;
         private readonly List<BookmarkNode> bookmarks = new();
         private readonly List<string> history = new();
         private readonly List<SavedCredential> savedPasswords = new();
+        private readonly List<string> closedTabs = new();
+        private readonly List<DownloadItem> downloads = new();
+        private readonly AutoCompleteStringCollection addressSuggest = new();
         private string homePageUrl = "https://www.google.com";
         private string searchUrlTemplate = "https://www.google.com/search?q={0}";
         private CoreWebView2Environment? sharedEnvironment;
+        private InjectedModuleCleaner? moduleCleaner;
+        private bool sizingAddressBox;
+        private DateTime lastProcessRecover = DateTime.MinValue;
 
         private BrowserTab? ActiveTab => tabStrip.SelectedIndex >= 0 && tabStrip.SelectedIndex < tabStrip.Tabs.Count
             ? tabStrip.Tabs[tabStrip.SelectedIndex] : null;
 
         public MainForm()
         {
+            EnsureModuleCleaner();
             Text = "Ceprkac";
             ClientSize = new Size(1280, 860);
             StartPosition = FormStartPosition.CenterScreen;
@@ -316,6 +433,8 @@ namespace Ceprkac
             historyFile = Path.Combine(appDataFolder, "history.txt");
             passwordsFile = Path.Combine(appDataFolder, "passwords.dat");
             settingsFile = Path.Combine(appDataFolder, "settings.txt");
+            downloadsFile = Path.Combine(appDataFolder, "downloads.json");
+            configFile = Path.Combine(appDataFolder, "config.json");
 
             // Tab strip
             tabStrip = new ChromeTabStrip { Dock = DockStyle.Top };
@@ -324,30 +443,74 @@ namespace Ceprkac
             tabStrip.NewTabClicked += (_, _) => AddNewTab(homePageUrl);
 
             // Toolbar using ToolStrip — reliable dark theme rendering
+            var darkRenderer = new DarkToolStripRenderer();
             navToolStrip = new ToolStrip
             {
                 GripStyle = ToolStripGripStyle.Hidden,
                 BackColor = Theme.Toolbar,
                 ForeColor = Color.White,
-                RenderMode = ToolStripRenderMode.System,
+                Renderer = darkRenderer,
                 Padding = new Padding(4, 4, 4, 4),
                 AutoSize = false,
                 Height = 40,
                 Dock = DockStyle.Top,
+                CanOverflow = false,
+                Stretch = true,
             };
 
-            backBtn = new ToolStripButton("◀") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36 };
-            fwdBtn = new ToolStripButton("▶") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36 };
-            refreshBtn = new ToolStripButton("⟳") { ForeColor = Color.White, Font = new Font("Segoe UI", 12f), AutoSize = false, Width = 36 };
-            addressBox = new ToolStripTextBox { BackColor = Theme.AddressBox, ForeColor = Color.White, Font = new Font("Segoe UI", 10f), AutoSize = false, Width = 800 };
-            addressBox.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.Handled = true; e.SuppressKeyPress = true; NavigateCurrentTab(addressBox.Text); } };
-            goBtn = new ToolStripButton("→") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36 };
-            bookmarkBtn = new ToolStripButton("☆") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36 };
+            backBtn = new ToolStripButton("◀") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
+            fwdBtn = new ToolStripButton("▶") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
+            refreshBtn = new ToolStripButton("⟳") { ForeColor = Color.White, Font = new Font("Segoe UI", 12f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
+            addressBox = new TextBox
+            {
+                BackColor = Theme.AddressBox,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10f),
+                BorderStyle = BorderStyle.FixedSingle,
+                Width = 800,
+                AutoCompleteMode = AutoCompleteMode.None,
+                AutoCompleteSource = AutoCompleteSource.CustomSource,
+                AutoCompleteCustomSource = addressSuggest,
+            };
+            addressBox.KeyPress += (_, e) =>
+            {
+                if (!char.IsControl(e.KeyChar) && addressBox.AutoCompleteMode != AutoCompleteMode.Suggest)
+                    addressBox.AutoCompleteMode = AutoCompleteMode.Suggest;
+            };
+            addressBox.KeyDown += (_, e) =>
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                addressBox.AutoCompleteMode = AutoCompleteMode.None;
+                NavigateCurrentTab(addressBox.Text);
+                var t = ActiveTab;
+                if (t != null) t.FocusOmnibox = false;
+            };
+            addressHost = new ToolStripControlHost(addressBox)
+            {
+                AutoSize = false,
+                Overflow = ToolStripItemOverflow.Never,
+                Margin = new Padding(4, 4, 4, 4),
+                Width = 800,
+            };
+            goBtn = new ToolStripButton("→") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
+            bookmarkBtn = new ToolStripButton("☆") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
+            downloadsBtn = new ToolStripDropDownButton("↓") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, ShowDropDownArrow = false, ToolTipText = "Downloads", Overflow = ToolStripItemOverflow.Never };
+            downloadsBtn.DropDown.BackColor = Theme.ActiveTab;
+            downloadsBtn.DropDown.ForeColor = Color.White;
+            downloadsBtn.DropDownOpening += (_, _) => RebuildDownloadsMenu();
 
-            menuBtn = new ToolStripDropDownButton("≡") { ForeColor = Color.White, Font = new Font("Segoe UI", 12f), AutoSize = false, Width = 36, ShowDropDownArrow = false };
+            menuBtn = new ToolStripDropDownButton("≡") { ForeColor = Color.White, Font = new Font("Segoe UI", 12f), AutoSize = false, Width = 36, ShowDropDownArrow = false, Overflow = ToolStripItemOverflow.Never };
             menuBtn.DropDown.BackColor = Theme.ActiveTab;
             menuBtn.DropDown.ForeColor = Color.White;
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("New Tab", null, (_, _) => AddNewTab(homePageUrl)) { ShortcutKeys = Keys.Control | Keys.T, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reopen Closed Tab", null, (_, _) => RestoreClosedTab()) { ShortcutKeys = Keys.Control | Keys.Shift | Keys.T, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripSeparator());
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Find in Page...", null, (_, _) => ToggleFindBar()) { ShortcutKeys = Keys.Control | Keys.F, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom In", null, (_, _) => ZoomBy(0.1)) { ShortcutKeys = Keys.Control | Keys.Oemplus, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom Out", null, (_, _) => ZoomBy(-0.1)) { ShortcutKeys = Keys.Control | Keys.OemMinus, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reset Zoom", null, (_, _) => ZoomReset()) { ShortcutKeys = Keys.Control | Keys.D0, ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuBtn.DropDownItems.Add(new ToolStripSeparator());
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("Add Bookmark", null, (_, _) => AddCurrentPageBookmark()) { ShortcutKeys = Keys.Control | Keys.D, ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("Import Bookmarks...", null, (_, _) => ImportBookmarksHtml()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
@@ -370,8 +533,10 @@ namespace Ceprkac
             goBtn.Click += (_, _) => NavigateCurrentTab(addressBox.Text);
             bookmarkBtn.Click += (_, _) => AddCurrentPageBookmark();
 
-            navToolStrip.Items.AddRange(new ToolStripItem[] { backBtn, fwdBtn, refreshBtn, new ToolStripSeparator(), addressBox, goBtn, new ToolStripSeparator(), bookmarkBtn, menuBtn });
-            navToolStrip.Resize += (_, _) => { addressBox.Width = navToolStrip.Width - 280; };
+            navToolStrip.Items.AddRange(new ToolStripItem[] { backBtn, fwdBtn, refreshBtn, new ToolStripSeparator(), addressHost, goBtn, new ToolStripSeparator(), bookmarkBtn, downloadsBtn, menuBtn });
+            addressHost.AutoSize = false;
+            SizeChanged += (_, _) => SizeAddressBox();
+            Shown += (_, _) => SizeAddressBox();
 
             // Bookmarks bar (ToolStrip for nested folder support)
             bookmarksBar = new ToolStrip
@@ -380,23 +545,37 @@ namespace Ceprkac
                 GripStyle = ToolStripGripStyle.Hidden,
                 BackColor = Theme.BookmarkBar,
                 ForeColor = Color.White,
-                RenderMode = ToolStripRenderMode.System,
+                Renderer = darkRenderer,
                 Padding = new Padding(4, 2, 4, 2),
                 AutoSize = false,
                 Height = 30,
                 Font = new Font("Segoe UI", 8f),
+                CanOverflow = true,
+                LayoutStyle = ToolStripLayoutStyle.HorizontalStackWithOverflow,
             };
+
+            findBar = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = Theme.Toolbar, Visible = false };
+            findInput = new TextBox { Left = 8, Top = 4, Width = 280, BackColor = Theme.AddressBox, ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
+            findInput.KeyDown += FindInput_KeyDown;
+            var findNext = new Button { Text = "Next", Left = 296, Top = 3, Width = 60, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.ActiveTab };
+            var findPrev = new Button { Text = "Prev", Left = 360, Top = 3, Width = 60, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.ActiveTab };
+            var findClose = new Button { Text = "×", Left = 424, Top = 3, Width = 32, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.ActiveTab };
+            findNext.Click += (_, _) => FindInPage(false);
+            findPrev.Click += (_, _) => FindInPage(true);
+            findClose.Click += (_, _) => { findBar.Visible = false; };
+            findBar.Controls.AddRange(new Control[] { findInput, findNext, findPrev, findClose });
 
             // WebView panel
             webViewPanel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.ActiveTab };
 
             // Status bar
             statusLabel = new ToolStripStatusLabel("Ready") { ForeColor = Theme.ForeDim };
-            statusStrip = new StatusStrip { BackColor = Theme.StatusBar };
+            statusStrip = new StatusStrip { BackColor = Theme.StatusBar, Renderer = darkRenderer, SizingGrip = false };
             statusStrip.Items.Add(statusLabel);
 
             // Layout (reverse dock order)
             Controls.Add(webViewPanel);
+            Controls.Add(findBar);
             Controls.Add(bookmarksBar);
             Controls.Add(navToolStrip);
             Controls.Add(tabStrip);
@@ -405,6 +584,7 @@ namespace Ceprkac
             KeyPreview = true;
             KeyDown += MainForm_KeyDown;
             Load += (_, _) => InitializeAsync();
+            FormClosing += (_, _) => { SaveWindowState(); moduleCleaner?.Stop(); };
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -415,17 +595,23 @@ namespace Ceprkac
 
         private void MainForm_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (e.Control && e.KeyCode == Keys.T) { AddNewTab(homePageUrl); e.Handled = true; }
+            if (e.Control && e.Shift && e.KeyCode == Keys.T) { RestoreClosedTab(); e.Handled = true; }
+            else if (e.Control && e.KeyCode == Keys.T) { AddNewTab(homePageUrl); e.Handled = true; }
             else if (e.Control && e.KeyCode == Keys.W) { if (tabStrip.SelectedIndex >= 0) CloseTab(tabStrip.SelectedIndex); e.Handled = true; }
             else if (e.Control && e.KeyCode == Keys.L) { addressBox.Focus(); addressBox.SelectAll(); e.Handled = true; }
-            else if (e.Control && e.KeyCode == Keys.Tab)
-            {
-                if (tabStrip.Tabs.Count > 1) SwitchToTab((tabStrip.SelectedIndex + 1) % tabStrip.Tabs.Count);
-                e.Handled = true;
-            }
+            else if (e.Control && e.KeyCode == Keys.F) { ToggleFindBar(); e.Handled = true; }
+            else if (e.Control && (e.KeyCode == Keys.Oemplus || e.KeyCode == Keys.Add)) { ZoomBy(0.1); e.Handled = true; }
+            else if (e.Control && (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)) { ZoomBy(-0.1); e.Handled = true; }
+            else if (e.Control && (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0)) { ZoomReset(); e.Handled = true; }
+            else if (e.KeyCode == Keys.Escape && findBar.Visible) { findBar.Visible = false; e.Handled = true; }
             else if (e.Control && e.Shift && e.KeyCode == Keys.Tab)
             {
                 if (tabStrip.Tabs.Count > 1) SwitchToTab((tabStrip.SelectedIndex - 1 + tabStrip.Tabs.Count) % tabStrip.Tabs.Count);
+                e.Handled = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.Tab)
+            {
+                if (tabStrip.Tabs.Count > 1) SwitchToTab((tabStrip.SelectedIndex + 1) % tabStrip.Tabs.Count);
                 e.Handled = true;
             }
         }
@@ -441,7 +627,10 @@ namespace Ceprkac
                 LoadBookmarks();
                 LoadHistory();
                 LoadPasswords();
+                LoadDownloads();
+                LoadWindowState();
                 RefreshBookmarksBar();
+                RefreshAddressSuggest();
 
                 // Load or download ad blocklist
                 await LoadOrUpdateBlocklistAsync();
@@ -449,22 +638,26 @@ namespace Ceprkac
                 var userDataFolder = Path.Combine(appDataFolder, "WebView2UserData");
                 Directory.CreateDirectory(userDataFolder);
 
-                // Check if WebView2 runtime is available, install if missing
-                if (!IsWebView2RuntimeInstalled())
+                if (!await EnsureWebView2RuntimeAsync())
+                    return;
+
+                try
                 {
-                    statusLabel.Text = "Installing WebView2 runtime...";
-                    bool installed = await InstallWebView2RuntimeAsync();
-                    if (!installed)
+                    var envOpts = new CoreWebView2EnvironmentOptions(
+                        "--no-first-run --disable-sync --disable-background-networking");
+                    sharedEnvironment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, envOpts);
+                }
+                catch (Exception createEx)
+                {
+                    statusLabel.Text = "WebView2 runtime missing or broken — repairing…";
+                    Refresh();
+                    if (await InstallWebView2RuntimeAsync() && !AlreadyRestartedForWebView2)
                     {
-                        statusLabel.Text = "WebView2 installation failed.";
-                        MessageBox.Show(this,
-                            "WebView2 runtime could not be installed.\r\nPlease install it manually from:\r\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/",
-                            "WebView2 Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        RestartApp("--after-webview2");
                         return;
                     }
+                    throw new Exception(createEx.Message, createEx);
                 }
-
-                sharedEnvironment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
                 AddNewTab(homePageUrl);
             }
             catch (Exception ex)
@@ -475,55 +668,233 @@ namespace Ceprkac
             }
         }
 
+        private static void EnableTls12()
+        {
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol |=
+                    System.Net.SecurityProtocolType.Tls12 | (System.Net.SecurityProtocolType)3072;
+            }
+            catch { }
+        }
+
+        private const string WebView2ClientGuid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+
+        private static bool IsWebView2InRegistry()
+        {
+            string[] keys =
+            {
+                @"SOFTWARE\Microsoft\EdgeUpdate\Clients\" + WebView2ClientGuid,
+                @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\" + WebView2ClientGuid,
+            };
+            foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
+            {
+                foreach (var key in keys)
+                {
+                    try
+                    {
+                        using var k = hive.OpenSubKey(key);
+                        var pv = k?.GetValue("pv") as string;
+                        if (!string.IsNullOrEmpty(pv) && pv != "0.0.0.0") return true;
+                    }
+                    catch { }
+                }
+            }
+            return false;
+        }
+
         private static bool IsWebView2RuntimeInstalled()
         {
             try
             {
                 var version = CoreWebView2Environment.GetAvailableBrowserVersionString();
-                return !string.IsNullOrEmpty(version);
+                if (!string.IsNullOrEmpty(version)) return true;
             }
-            catch { return false; }
+            catch { }
+            return IsWebView2InRegistry();
+        }
+
+        private static bool AlreadyRestartedForWebView2 =>
+            Environment.GetCommandLineArgs().Any(a =>
+                string.Equals(a, "--after-webview2", StringComparison.OrdinalIgnoreCase));
+
+        private async Task<bool> EnsureWebView2RuntimeAsync()
+        {
+            bool apiOk = false;
+            try { apiOk = !string.IsNullOrEmpty(CoreWebView2Environment.GetAvailableBrowserVersionString()); } catch { }
+
+            if (apiOk) return true;
+
+            // Installed for this machine but this process cannot see it yet (bitness / loader).
+            if (IsWebView2InRegistry())
+            {
+                if (!AlreadyRestartedForWebView2)
+                {
+                    RestartApp("--after-webview2");
+                    return false;
+                }
+                return true;
+            }
+
+            statusLabel.Text = "WebView2 not found — downloading runtime from Microsoft…";
+            Refresh();
+            if (!await InstallWebView2RuntimeAsync())
+            {
+                var retry = MessageBox.Show(this,
+                    "The Edge WebView2 runtime is required and could not be installed automatically.\r\n\r\nRetry download?",
+                    "WebView2 Required", MessageBoxButtons.RetryCancel, MessageBoxIcon.Warning);
+                if (retry == DialogResult.Retry)
+                    return await EnsureWebView2RuntimeAsync();
+                statusLabel.Text = "WebView2 runtime is required.";
+                return false;
+            }
+
+            if (!AlreadyRestartedForWebView2)
+            {
+                RestartApp("--after-webview2");
+                return false;
+            }
+            return IsWebView2RuntimeInstalled();
         }
 
         private async Task<bool> InstallWebView2RuntimeAsync()
         {
+            EnableTls12();
             var bootstrapperPath = Path.Combine(Path.GetTempPath(), "MicrosoftEdgeWebview2Setup.exe");
             try
             {
-                // Download the Evergreen Bootstrapper (~1.5MB)
-                using (var http = new HttpClient())
+                statusLabel.Text = "Downloading WebView2 runtime…";
+                Refresh();
+                byte[]? bytes = null;
+                try
                 {
-                    var bytes = await http.GetByteArrayAsync(
-                        "https://go.microsoft.com/fwlink/p/?LinkId=2124703");
-                    File.WriteAllBytes(bootstrapperPath, bytes);
+                    using (var http = new HttpClient())
+                    {
+                        http.Timeout = TimeSpan.FromMinutes(5);
+                        bytes = await http.GetByteArrayAsync(
+                            "https://go.microsoft.com/fwlink/p/?LinkId=2124703");
+                    }
                 }
-
-                // Run silent install
-                var psi = new ProcessStartInfo
+                catch
                 {
-                    FileName = bootstrapperPath,
-                    Arguments = "/silent /install",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-                var proc = Process.Start(psi);
-                if (proc == null) return false;
-                await Task.Run(() => proc.WaitForExit());
+                    using (var wc = new System.Net.WebClient())
+                        bytes = await wc.DownloadDataTaskAsync(
+                            "https://go.microsoft.com/fwlink/p/?LinkId=2124703");
+                }
+                if (bytes == null || bytes.Length < 10000) return false;
+                File.WriteAllBytes(bootstrapperPath, bytes);
 
-                return IsWebView2RuntimeInstalled();
+                statusLabel.Text = "Installing WebView2 runtime…";
+                Refresh();
+                await RunWebView2Setup(bootstrapperPath, "/silent /install", false);
+                if (!IsWebView2InRegistry() && !IsWebView2RuntimeInstalled())
+                    await RunWebView2Setup(bootstrapperPath, "/install", true);
+
+                for (int i = 0; i < 20 && !IsWebView2InRegistry() && !IsWebView2RuntimeInstalled(); i++)
+                {
+                    statusLabel.Text = "Waiting for WebView2 runtime…";
+                    await Task.Delay(500);
+                }
+                return IsWebView2InRegistry() || IsWebView2RuntimeInstalled();
             }
-            catch { return false; }
+            catch
+            {
+                return false;
+            }
             finally
             {
                 try { File.Delete(bootstrapperPath); } catch { }
             }
         }
 
+        private static async Task<bool> RunWebView2Setup(string path, string args, bool elevate)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = path,
+                    Arguments = args,
+                    UseShellExecute = elevate,
+                    CreateNoWindow = !elevate,
+                };
+                if (elevate) psi.Verb = "runas";
+                var proc = Process.Start(psi);
+                if (proc == null) return false;
+                await Task.Run(() => proc.WaitForExit());
+                return IsWebView2RuntimeInstalled();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void RestartApp(string extraArg = "")
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = Application.ExecutablePath,
+                    Arguments = extraArg ?? "",
+                    UseShellExecute = true,
+                    WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
+                });
+            }
+            catch { }
+            BeginInvoke(new Action(Close));
+        }
+
+        private void EnsureModuleCleaner()
+        {
+            if (moduleCleaner != null) return;
+            moduleCleaner = InjectedModuleCleaner.Instance ?? InjectedModuleCleaner.StartGlobal();
+        }
+
+        private void SizeAddressBox()
+        {
+            if (sizingAddressBox || navToolStrip.IsDisposed) return;
+            sizingAddressBox = true;
+            try
+            {
+                int used = navToolStrip.Padding.Horizontal;
+                foreach (ToolStripItem item in navToolStrip.Items)
+                {
+                    if (item == addressHost || !item.Available) continue;
+                    used += item.Width + item.Margin.Horizontal;
+                }
+                int w = Math.Max(200, navToolStrip.DisplayRectangle.Width - used);
+                if (Math.Abs(addressHost.Width - w) <= 1) return;
+                addressHost.AutoSize = false;
+                addressHost.Width = w;
+            }
+            finally
+            {
+                sizingAddressBox = false;
+            }
+        }
+
+        private void SetAddressText(string? url)
+        {
+            url = url ?? "";
+            if (addressBox.Text == url) return;
+            addressBox.AutoCompleteMode = AutoCompleteMode.None;
+            addressBox.Text = url;
+        }
+
+        private void FocusAddressBar()
+        {
+            if (addressBox.IsDisposed) return;
+            addressBox.Focus();
+            addressBox.SelectAll();
+        }
+
         private async void AddNewTab(string url, int? insertAfter = null)
         {
             if (sharedEnvironment == null) return;
-            var webView = new WebView2 { Dock = DockStyle.Fill, Visible = false };
-            var tab = new BrowserTab { Url = url, WebView = webView };
+            var webView = new WebView2 { Dock = DockStyle.Fill, Visible = true };
+            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = !string.IsNullOrEmpty(url) };
 
             int insertIndex = insertAfter.HasValue ? insertAfter.Value + 1
                 : tabStrip.SelectedIndex >= 0 ? tabStrip.SelectedIndex + 1
@@ -531,6 +902,8 @@ namespace Ceprkac
 
             tabStrip.Tabs.Insert(insertIndex, tab);
             webViewPanel.Controls.Add(webView);
+            webView.BringToFront();
+            _ = webView.Handle;
 
             try
             {
@@ -538,46 +911,55 @@ namespace Ceprkac
                 var core = webView.CoreWebView2;
                 if (core != null)
                 {
-                    core.NavigationStarting += (_, _) => { tab.IsLoading = true; if (ActiveTab == tab) statusLabel.Text = "Loading..."; tabStrip.Invalidate(); };
-                    core.NavigationCompleted += (_, _) => { tab.IsLoading = false; UpdateTabState(tab); tabStrip.Invalidate(); TryAutoFillCredentials(tab); InjectAdElementHider(tab); };
+                    core.NavigationStarting += (_, _) => { tab.IsLoading = true; tab.LoadProgress = 10; if (ActiveTab == tab) statusLabel.Text = "Loading..."; tabStrip.Invalidate(); };
+                    core.NavigationCompleted += (_, _) => { tab.IsLoading = false; tab.LoadProgress = 100; UpdateTabState(tab); tabStrip.Invalidate(); TryAutoFillCredentials(tab); InjectAdElementHider(tab); };
                     core.DocumentTitleChanged += (_, _) => { tab.Title = core.DocumentTitle ?? "New Tab"; if (ActiveTab == tab) Text = tab.Title + " - Ceprkac"; tabStrip.Invalidate(); };
                     core.SourceChanged += (_, _) =>
                     {
                         tab.Url = core.Source ?? "";
-                        if (ActiveTab == tab) addressBox.Text = tab.Url;
-                        // Re-trigger autofill for multi-step logins (Google account picker → password page)
-                        TryAutoFillCredentials(tab);
+                        if (ActiveTab == tab && !addressBox.Focused) SetAddressText(tab.Url);
                     };
                     core.NewWindowRequested += (_, args) =>
                     {
                         var uri = (args.Uri ?? "").ToLower();
-                        // Let auth/OAuth flows open as native WebView2 popups
-                        // They need window.opener, COOP headers, and shared cookies
-                        if (uri.Contains("accounts.google.com") || uri.Contains("/gsi/") ||
-                            uri.Contains("appleid.apple.com") || uri.Contains("login.microsoftonline.com") ||
-                            uri.Contains("api.twitter.com") || uri.Contains("twitter.com/i/oauth") ||
-                            uri.Contains("x.com/i/oauth") || uri.Contains("/oauth") ||
-                            uri.Contains("/auth/") || uri.Contains("/authorize") ||
-                            uri.Contains("/signin") || uri.Contains("/sso") ||
-                            uri.Contains("pay.google.com") || uri.Contains("payments.google.com") ||
-                            uri.Contains("clerk.") || uri.Contains("suno.com") || uri.Contains("suno.ai"))
-                        {
-                            return; // Let WebView2 open native popup
-                        }
-
-                        // Block new windows to ad domains — don't create a tab at all
                         if (IsAdUrl(uri))
                         {
                             args.Handled = true;
                             adsBlockedCount++;
                             return;
                         }
-
+                        // Open window.open in a real tab and keep window.opener (GBrowser behaviour).
                         args.Handled = true;
+                        var deferral = args.GetDeferral();
                         int idx = tabStrip.Tabs.IndexOf(tab);
-                        AddNewTab(args.Uri ?? homePageUrl, idx >= 0 ? idx : (int?)null);
+                        BeginInvoke(async () =>
+                        {
+                            try
+                            {
+                                var child = await CreateTabForNewWindow(idx >= 0 ? idx : (int?)null);
+                                if (child?.CoreWebView2 != null)
+                                    args.NewWindow = child.CoreWebView2;
+                            }
+                            finally { deferral.Complete(); }
+                        });
                     };
                     core.DownloadStarting += Core_DownloadStarting;
+                    core.PermissionRequested += Core_PermissionRequested;
+                    core.ProcessFailed += (_, e) =>
+                    {
+                        try
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                if ((DateTime.UtcNow - lastProcessRecover).TotalSeconds < 3) return;
+                                lastProcessRecover = DateTime.UtcNow;
+                                statusLabel.Text = "Page process recovered — reloading…";
+                                try { if (tab.WebView.CoreWebView2 != null) tab.WebView.Reload(); } catch { }
+                            }));
+                        }
+                        catch { }
+                    };
+                    _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
 
                     // Block navigations to ad domains — cancel and auto-close empty tabs
                     core.NavigationStarting += (_, navArgs) =>
@@ -632,6 +1014,7 @@ namespace Ceprkac
                 }
                 SwitchToTab(insertIndex);
                 if (!string.IsNullOrWhiteSpace(url)) NavigateTab(tab, url);
+                if (tab.FocusOmnibox) FocusAddressBar();
             }
             catch (Exception ex)
             {
@@ -649,10 +1032,13 @@ namespace Ceprkac
             var tab = tabStrip.Tabs[index];
             tab.WebView.Visible = true;
             tab.WebView.BringToFront();
-            addressBox.Text = tab.Url;
+            try { tab.WebView.ZoomFactor = tab.ZoomFactor; } catch { }
+            SetAddressText(tab.Url);
             Text = tab.Title + " - Ceprkac";
             UpdateTabState(tab);
             tabStrip.Invalidate();
+            if (tab.FocusOmnibox) FocusAddressBar();
+            else tab.WebView.Focus();
         }
 
         private async void OpenOAuthPopup(string url, BrowserTab parentTab)
@@ -743,11 +1129,89 @@ namespace Ceprkac
             if (index < 0 || index >= tabStrip.Tabs.Count) return;
             if (tabStrip.Tabs.Count == 1) { NavigateTab(tabStrip.Tabs[0], homePageUrl); return; }
             var tab = tabStrip.Tabs[index];
+            if (!string.IsNullOrWhiteSpace(tab.Url) && tab.Url != "about:blank")
+            {
+                closedTabs.Add(tab.Url);
+                if (closedTabs.Count > 20) closedTabs.RemoveRange(0, closedTabs.Count - 20);
+            }
             tab.WebView.Visible = false;
             webViewPanel.Controls.Remove(tab.WebView);
             tab.WebView.Dispose();
             tabStrip.Tabs.RemoveAt(index);
             SwitchToTab(Math.Min(index, tabStrip.Tabs.Count - 1));
+        }
+
+        private async Task<WebView2?> CreateTabForNewWindow(int? insertAfter)
+        {
+            if (sharedEnvironment == null) return null;
+            var webView = new WebView2 { Dock = DockStyle.Fill, Visible = true };
+            var tab = new BrowserTab { Url = "", WebView = webView, IsPopup = true };
+            int insertIndex = insertAfter.HasValue ? insertAfter.Value + 1 : tabStrip.Tabs.Count;
+            tabStrip.Tabs.Insert(insertIndex, tab);
+            webViewPanel.Controls.Add(webView);
+            webView.BringToFront();
+            _ = webView.Handle;
+            await webView.EnsureCoreWebView2Async(sharedEnvironment);
+            var core = webView.CoreWebView2;
+            if (core != null)
+            {
+                core.NavigationStarting += (_, _) => { tab.IsLoading = true; tabStrip.Invalidate(); };
+                core.NavigationCompleted += (_, _) => { tab.IsLoading = false; UpdateTabState(tab); tabStrip.Invalidate(); };
+                core.DocumentTitleChanged += (_, _) => { tab.Title = core.DocumentTitle ?? "New Tab"; tabStrip.Invalidate(); };
+                core.SourceChanged += (_, _) => { tab.Url = core.Source ?? ""; if (ActiveTab == tab && !addressBox.Focused) SetAddressText(tab.Url); };
+                core.WindowCloseRequested += (_, _) => { int ti = tabStrip.Tabs.IndexOf(tab); if (ti >= 0) CloseTab(ti); };
+                core.DownloadStarting += Core_DownloadStarting;
+                core.PermissionRequested += Core_PermissionRequested;
+                SetupAdBlocker(core);
+                _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
+            }
+            SwitchToTab(insertIndex);
+            return webView;
+        }
+
+        private void RestoreClosedTab()
+        {
+            if (closedTabs.Count == 0) return;
+            var url = closedTabs[closedTabs.Count - 1];
+            closedTabs.RemoveAt(closedTabs.Count - 1);
+            AddNewTab(url);
+        }
+
+        private void ZoomBy(double delta)
+        {
+            var tab = ActiveTab; if (tab == null) return;
+            tab.ZoomFactor = Math.Max(0.3, Math.Min(3.0, tab.ZoomFactor + delta));
+            try { tab.WebView.ZoomFactor = tab.ZoomFactor; } catch { }
+            statusLabel.Text = $"Zoom: {(int)(tab.ZoomFactor * 100)}%";
+        }
+
+        private void ZoomReset()
+        {
+            var tab = ActiveTab; if (tab == null) return;
+            tab.ZoomFactor = 1.0;
+            try { tab.WebView.ZoomFactor = 1.0; } catch { }
+            statusLabel.Text = "Zoom: 100%";
+        }
+
+        private void ToggleFindBar()
+        {
+            findBar.Visible = !findBar.Visible;
+            if (findBar.Visible) { findInput.Focus(); findInput.SelectAll(); }
+        }
+
+        private void FindInput_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter) { FindInPage(e.Shift); e.Handled = true; }
+            else if (e.KeyCode == Keys.Escape) { findBar.Visible = false; e.Handled = true; }
+        }
+
+        private async void FindInPage(bool backward)
+        {
+            var core = ActiveTab?.WebView.CoreWebView2;
+            if (core == null) return;
+            string q = findInput.Text.Replace("\\", "\\\\").Replace("'", "\\'");
+            string js = $"window.find('{q}', false, {(backward ? "true" : "false")}, true, false, false, false);";
+            try { await core.ExecuteScriptAsync(js); } catch { }
         }
 
         private void NavigateTab(BrowserTab tab, string url)
@@ -765,7 +1229,7 @@ namespace Ceprkac
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
             tab.WebView.CoreWebView2?.Navigate(uri.ToString());
             tab.Url = uri.ToString();
-            if (ActiveTab == tab) addressBox.Text = uri.ToString();
+            if (ActiveTab == tab) SetAddressText(uri.ToString());
             AddToHistory(uri.ToString());
         }
 
@@ -779,7 +1243,8 @@ namespace Ceprkac
             backBtn.ForeColor = backBtn.Enabled ? Color.White : Theme.ForeDim;
             fwdBtn.Enabled = core?.CanGoForward ?? false;
             fwdBtn.ForeColor = fwdBtn.Enabled ? Color.White : Theme.ForeDim;
-            addressBox.Text = tab.WebView.Source?.AbsoluteUri ?? addressBox.Text;
+            if (!addressBox.Focused)
+                SetAddressText(tab.WebView.Source?.AbsoluteUri ?? tab.Url);
             statusLabel.Text = $"Ready | Ads blocked: {adsBlockedCount} | Domains: {BlockedAdDomains.Count}";
             var currentUrl = tab.WebView.Source?.AbsoluteUri ?? "";
             bookmarkBtn.Text = BookmarkExistsInTree(bookmarks, currentUrl) ? "★" : "☆";
@@ -791,19 +1256,210 @@ namespace Ceprkac
             using var dialog = new SaveFileDialog { FileName = filename, Filter = "All Files|*.*", Title = "Save Download", RestoreDirectory = true };
             if (dialog.ShowDialog(this) != DialogResult.OK) { e.Cancel = true; statusLabel.Text = "Download canceled."; return; }
             e.ResultFilePath = dialog.FileName;
-            statusLabel.Text = $"Downloading {Path.GetFileName(dialog.FileName)}...";
+            var item = new DownloadItem
+            {
+                Filename = Path.GetFileName(dialog.FileName),
+                Path = dialog.FileName,
+                Url = e.DownloadOperation.Uri ?? "",
+                Status = "Downloading",
+            };
+            downloads.Add(item);
+            if (downloads.Count > 40) downloads.RemoveRange(0, downloads.Count - 40);
+            statusLabel.Text = $"Downloading {item.Filename}…";
+            RefreshDownloadsButton();
             var op = e.DownloadOperation;
-            op.BytesReceivedChanged += (_, _) => Invoke(() =>
+            op.BytesReceivedChanged += (_, _) => BeginInvoke(() =>
             {
-                var total = op.TotalBytesToReceive; var recv = op.BytesReceived;
-                statusLabel.Text = total > 0 ? $"Downloading {Path.GetFileName(dialog.FileName)} {recv:N0}/{total:N0} bytes"
-                    : $"Downloading {Path.GetFileName(dialog.FileName)} {recv:N0} bytes";
+                if (item.Status != "Downloading") return;
+                item.Received = op.BytesReceived;
+                item.Total = (long)op.TotalBytesToReceive.GetValueOrDefault();
+                statusLabel.Text = item.Total > 0
+                    ? $"Downloading {item.Filename}: {item.Received:N0} / {item.Total:N0}"
+                    : $"Downloading {item.Filename}: {item.Received:N0}";
             });
-            op.StateChanged += (_, _) => Invoke(() =>
+            op.StateChanged += (_, _) => BeginInvoke(() =>
             {
-                if (op.State == CoreWebView2DownloadState.Completed) statusLabel.Text = "Download complete.";
-                else if (op.State == CoreWebView2DownloadState.Interrupted) statusLabel.Text = "Download interrupted.";
+                if (op.State == CoreWebView2DownloadState.Completed)
+                {
+                    item.Status = "Complete";
+                    if (item.Total <= 0) item.Total = item.Received;
+                    statusLabel.Text = $"Download complete: {item.Filename}";
+                    SaveDownloads();
+                    RefreshDownloadsButton();
+                }
+                else if (op.State == CoreWebView2DownloadState.Interrupted)
+                {
+                    item.Status = "Interrupted";
+                    statusLabel.Text = $"Download interrupted: {item.Filename}";
+                    SaveDownloads();
+                    RefreshDownloadsButton();
+                }
             });
+        }
+
+        private void RefreshDownloadsButton()
+        {
+            int active = downloads.Count(d => d.Status == "Downloading");
+            downloadsBtn.Text = active > 0 ? $"↓ {active}" : "↓";
+            downloadsBtn.ToolTipText = active > 0 ? $"Downloads — {active} in progress" : "Downloads";
+        }
+
+        private void RebuildDownloadsMenu()
+        {
+            downloadsBtn.DropDownItems.Clear();
+            var recent = downloads.AsEnumerable().Reverse().Take(15).ToList();
+            if (recent.Count == 0)
+            {
+                downloadsBtn.DropDownItems.Add(new ToolStripMenuItem("No downloads yet.") { Enabled = false, ForeColor = Theme.ForeDim });
+                return;
+            }
+            foreach (var dl in recent)
+            {
+                string extra = dl.Status == "Downloading" && dl.Total > 0
+                    ? $"{dl.Received * 100 / Math.Max(dl.Total, 1)}%"
+                    : dl.Status;
+                var itemDl = dl;
+                var mi = new ToolStripMenuItem($"{dl.Filename}  —  {extra}")
+                {
+                    ForeColor = Color.White, BackColor = Theme.ActiveTab,
+                };
+                mi.Click += (_, _) => { try { if (File.Exists(itemDl.Path)) Process.Start(new ProcessStartInfo(itemDl.Path) { UseShellExecute = true }); } catch { } };
+                downloadsBtn.DropDownItems.Add(mi);
+            }
+            downloadsBtn.DropDownItems.Add(new ToolStripSeparator());
+            var clear = new ToolStripMenuItem("Clear") { ForeColor = Color.White, BackColor = Theme.ActiveTab };
+            clear.Click += (_, _) =>
+            {
+                downloads.RemoveAll(d => d.Status != "Downloading");
+                SaveDownloads();
+                RefreshDownloadsButton();
+            };
+            downloadsBtn.DropDownItems.Add(clear);
+        }
+
+        private void LoadDownloads()
+        {
+            try
+            {
+                if (!File.Exists(downloadsFile)) return;
+                var list = JsonSerializer.Deserialize<List<DownloadItem>>(File.ReadAllText(downloadsFile));
+                if (list == null) return;
+                foreach (var d in list.Skip(Math.Max(0, list.Count - 40)))
+                {
+                    if (d.Status == "Downloading") d.Status = "Complete";
+                    downloads.Add(d);
+                }
+            }
+            catch { }
+        }
+
+        private void SaveDownloads()
+        {
+            try
+            {
+                var doneAll = downloads.Where(d => d.Status != "Downloading").ToList();
+                var done = doneAll.Skip(Math.Max(0, doneAll.Count - 40)).ToList();
+                File.WriteAllText(downloadsFile, JsonSerializer.Serialize(done, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch { }
+        }
+
+        private void Core_PermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs e)
+        {
+            var kind = e.PermissionKind;
+            if (kind == CoreWebView2PermissionKind.Camera || kind == CoreWebView2PermissionKind.Microphone)
+            {
+                string name = kind == CoreWebView2PermissionKind.Camera ? "camera" : "microphone";
+                var r = MessageBox.Show(this, $"Allow this site to use your {name}?", "Permission",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                e.State = r == DialogResult.Yes
+                    ? CoreWebView2PermissionState.Allow
+                    : CoreWebView2PermissionState.Deny;
+                return;
+            }
+            e.State = CoreWebView2PermissionState.Default;
+        }
+
+        private const string DisablePasskeyJs = @"
+(function(){
+  if (window.__gNoPasskey) return;
+  window.__gNoPasskey = 1;
+  try {
+    if (window.PublicKeyCredential) {
+      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = function(){ return Promise.resolve(false); };
+      PublicKeyCredential.isConditionalMediationAvailable = function(){ return Promise.resolve(false); };
+    }
+  } catch(e) {}
+  try {
+    if (navigator.credentials) {
+      var origGet = navigator.credentials.get.bind(navigator.credentials);
+      var origCreate = navigator.credentials.create.bind(navigator.credentials);
+      navigator.credentials.get = function(opts){
+        if (opts && opts.publicKey)
+          return Promise.reject(new DOMException('NotAllowedError'));
+        return origGet(opts);
+      };
+      navigator.credentials.create = function(opts){
+        if (opts && opts.publicKey)
+          return Promise.reject(new DOMException('NotAllowedError'));
+        return origCreate(opts);
+      };
+    }
+  } catch(e) {}
+})();";
+
+        private void RefreshAddressSuggest()
+        {
+            addressSuggest.Clear();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void add(string? u)
+            {
+                if (string.IsNullOrWhiteSpace(u) || !seen.Add(u)) return;
+                addressSuggest.Add(u);
+            }
+            foreach (var h in history) add(h);
+            void walk(List<BookmarkNode> nodes)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n.Type == "link") add(n.Href);
+                    else walk(n.Children);
+                }
+            }
+            walk(bookmarks);
+        }
+
+        private void LoadWindowState()
+        {
+            try
+            {
+                if (!File.Exists(configFile)) return;
+                using var doc = JsonDocument.Parse(File.ReadAllText(configFile));
+                if (!doc.RootElement.TryGetProperty("geometry", out var g)) return;
+                int x = g.GetProperty("x").GetInt32();
+                int y = g.GetProperty("y").GetInt32();
+                int w = g.GetProperty("width").GetInt32();
+                int h = g.GetProperty("height").GetInt32();
+                bool max = g.TryGetProperty("maximized", out var m) && m.GetBoolean();
+                StartPosition = FormStartPosition.Manual;
+                Bounds = new Rectangle(x, y, Math.Max(600, w), Math.Max(400, h));
+                if (max) WindowState = FormWindowState.Maximized;
+            }
+            catch { }
+        }
+
+        private void SaveWindowState()
+        {
+            try
+            {
+                var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+                var json = JsonSerializer.Serialize(new
+                {
+                    geometry = new { x = b.X, y = b.Y, width = b.Width, height = b.Height, maximized = WindowState == FormWindowState.Maximized }
+                }, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(configFile, json);
+            }
+            catch { }
         }
 
         private void AddressBar_KeyDown(object? sender, KeyEventArgs e)
@@ -892,34 +1548,42 @@ namespace Ceprkac
 
         private void RefreshBookmarksBar()
         {
-            bookmarksBar.Items.Clear();
-            foreach (var node in bookmarks)
+            bookmarksBar.SuspendLayout();
+            try
             {
-                if (node.Type == "folder")
+                bookmarksBar.Items.Clear();
+                foreach (var node in bookmarks)
                 {
-                    var dropDown = new ToolStripDropDownButton(node.Title)
+                    if (node.Type == "folder")
                     {
-                        ForeColor = Theme.ForeLight,
-                        Font = bookmarksBar.Font,
-                        DisplayStyle = ToolStripItemDisplayStyle.Text,
-                    };
-                    dropDown.DropDown.BackColor = Theme.ActiveTab;
-                    dropDown.DropDown.ForeColor = Color.White;
-                    AddChildrenToMenu(dropDown.DropDownItems, node.Children);
-                    bookmarksBar.Items.Add(dropDown);
-                }
-                else
-                {
-                    var btn = new ToolStripButton(node.Title)
+                        var dropDown = new ToolStripDropDownButton(node.Title)
+                        {
+                            ForeColor = Theme.ForeLight,
+                            Font = bookmarksBar.Font,
+                            DisplayStyle = ToolStripItemDisplayStyle.Text,
+                        };
+                        dropDown.DropDown.BackColor = Theme.ActiveTab;
+                        dropDown.DropDown.ForeColor = Color.White;
+                        AddChildrenToMenu(dropDown.DropDownItems, node.Children);
+                        bookmarksBar.Items.Add(dropDown);
+                    }
+                    else
                     {
-                        ForeColor = Theme.ForeLight,
-                        Font = bookmarksBar.Font,
-                        DisplayStyle = ToolStripItemDisplayStyle.Text,
-                        Tag = node.Href,
-                    };
-                    btn.Click += (_, _) => NavigateCurrentTab(node.Href);
-                    bookmarksBar.Items.Add(btn);
+                        var btn = new ToolStripButton(node.Title)
+                        {
+                            ForeColor = Theme.ForeLight,
+                            Font = bookmarksBar.Font,
+                            DisplayStyle = ToolStripItemDisplayStyle.Text,
+                            Tag = node.Href,
+                        };
+                        btn.Click += (_, _) => NavigateCurrentTab(node.Href);
+                        bookmarksBar.Items.Add(btn);
+                    }
                 }
+            }
+            finally
+            {
+                bookmarksBar.ResumeLayout(true);
             }
         }
 
@@ -1331,8 +1995,11 @@ namespace Ceprkac
                 var choice = SearchEngines[list.SelectedIndex];
                 homePageUrl = choice.Home;
                 searchUrlTemplate = choice.Search;
+                SaveSettings();
+                if (ActiveTab != null) NavigateCurrentTab(homePageUrl);
             }
-            SaveSettings();
+            else
+                SaveSettings();
         }
 
         // ── History ──
@@ -1353,6 +2020,7 @@ namespace Ceprkac
             history.Add(url);
             if (history.Count > 100) history.RemoveRange(0, history.Count - 100);
             SaveHistory();
+            if (!addressSuggest.Contains(url)) addressSuggest.Add(url);
         }
 
         private void ClearHistory()
@@ -1465,7 +2133,8 @@ namespace Ceprkac
 
         private static readonly HashSet<string> AdBlockWhitelist = new(StringComparer.OrdinalIgnoreCase)
         {
-            "discord.com", "discordapp.com", "discord.gg", "discord.media",
+            "discord.com", "discordapp.com", "discordapp.net", "discord.gg", "discord.media",
+            "youtube-nocookie.com",
             "apple.com", "icloud.com",
             "ebay.com",
             "paypal.com",
@@ -1512,6 +2181,17 @@ namespace Ceprkac
             "humblebundle.com", "itch.io", "indiegala.com",
             "twitch.tv",
         };
+
+        private static string BaseDomain(string host)
+        {
+            var p = host.Split('.');
+            if (p.Length >= 3 && (p[p.Length - 1] == "uk" || p[p.Length - 1] == "au" || p[p.Length - 1] == "jp" || p[p.Length - 1] == "br" || p[p.Length - 1] == "za" || p[p.Length - 1] == "nz" || p[p.Length - 1] == "kr" || p[p.Length - 1] == "in"))
+                return string.Join(".", p[p.Length - 3], p[p.Length - 2], p[p.Length - 1]);
+            return p.Length >= 2 ? string.Join(".", p[p.Length - 2], p[p.Length - 1]) : host;
+        }
+
+        private static bool SameSite(string a, string b) =>
+            string.Equals(BaseDomain(a), BaseDomain(b), StringComparison.OrdinalIgnoreCase);
 
         private static bool IsAdBlockWhitelisted(string host)
         {
@@ -1590,6 +2270,13 @@ namespace Ceprkac
                     var host = uri.Host.ToLower();
                     // Skip whitelisted request hosts
                     if (IsAdBlockWhitelisted(host)) return;
+                    // Same-site (first-party) requests are never blocked
+                    try
+                    {
+                        var pageHost = new Uri(core.Source ?? "").Host.ToLower();
+                        if (SameSite(host, pageHost)) return;
+                    }
+                    catch { }
                     // Check if the host or any parent domain is in the block list
                     var checkHost = host;
                     while (checkHost.Contains('.'))

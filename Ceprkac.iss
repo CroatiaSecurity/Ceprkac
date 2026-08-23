@@ -1,6 +1,6 @@
 ; Ceprkac Inno Setup Script
 #define MyAppName "Ceprkac"
-#define MyAppVersion "0.6.5.0"
+#define MyAppVersion "0.6.6"
 #define MyAppPublisher "Ceprkac"
 #define MyAppExeName "Ceprkac.exe"
 #define MyAppIcon "Ceprkac.ico"
@@ -29,6 +29,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "bin\publish\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "bin\publish\{#MyAppExeName}.config"; DestDir: "{app}"; Flags: ignoreversion
 Source: "bin\publish\{#MyAppIcon}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "bin\publish\*.dll"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 Source: "bin\publish\*.json"; DestDir: "{app}"; Flags: ignoreversion
