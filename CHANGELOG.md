@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.10 — 2026-08-23
+
+Installer: `Ceprkac-0.6.10-Setup.exe`
+
+### YouTube ads
+
+- Restored main-world injection (`Page.addScriptToEvaluateOnNewDocument`) so prerolls and feed ads are stripped from `ytInitialData` / player JSON **before** YouTube’s scripts run.
+- 0.6.8 switched that to an isolated-world `<script>` tag so Cloudflare would not see DevTools on every tab. YouTube’s CSP blocks those tags, which is why ads came back.
+- CDP is armed only when **this tab** navigates to YouTube, then the navigation is replayed. Other tabs (TeamOS, etc.) never attach it.
+
+---
+
 ## 0.6.9 — 2026-08-23
 
 Installer: `Ceprkac-0.6.9-Setup.exe`
