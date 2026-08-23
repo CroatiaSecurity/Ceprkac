@@ -87,6 +87,7 @@ namespace Ceprkac
         public double ZoomFactor { get; set; } = 1.0;
         public bool IsPopup { get; set; }
         public bool FocusOmnibox { get; set; }
+        public bool OmniboxUserTyped { get; set; }
         public DateTime LastAutoFillAttempt { get; set; } = DateTime.MinValue;
     }
 
@@ -369,11 +370,27 @@ namespace Ceprkac
     }
 
     // ───────────────────────── main form ────────────────────────────────────
-    public class MainForm : Form
+    public class MainForm : Form, IMessageFilter
     {
         [DllImport("dwmapi.dll", PreserveSig = true)]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+        [DllImport("user32.dll")]
+        private static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        private const uint GA_ROOT = 2;
+        private const int SW_RESTORE = 9;
+
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_CHAR = 0x0102;
+        private const int WM_DEADCHAR = 0x0103;
+        private const int WM_UNICHAR = 0x0109;
 
         private readonly ChromeTabStrip tabStrip;
         private readonly ToolStrip navToolStrip;
@@ -412,13 +429,19 @@ namespace Ceprkac
         private InjectedModuleCleaner? moduleCleaner;
         private bool sizingAddressBox;
         private DateTime lastProcessRecover = DateTime.MinValue;
+        private readonly List<string> pendingExternalUrls = new();
 
         private BrowserTab? ActiveTab => tabStrip.SelectedIndex >= 0 && tabStrip.SelectedIndex < tabStrip.Tabs.Count
             ? tabStrip.Tabs[tabStrip.SelectedIndex] : null;
 
-        public MainForm()
+        public MainForm(IEnumerable<string>? startupUrls = null)
         {
             EnsureModuleCleaner();
+            if (startupUrls != null)
+            {
+                foreach (var u in startupUrls)
+                    if (!string.IsNullOrWhiteSpace(u)) pendingExternalUrls.Add(u.Trim());
+            }
             Text = "Ceprkac";
             ClientSize = new Size(1280, 860);
             StartPosition = FormStartPosition.CenterScreen;
@@ -474,7 +497,12 @@ namespace Ceprkac
             };
             addressBox.KeyPress += (_, e) =>
             {
-                if (!char.IsControl(e.KeyChar) && addressBox.AutoCompleteMode != AutoCompleteMode.Suggest)
+                if (char.IsControl(e.KeyChar)) return;
+                var t = ActiveTab;
+                if (t != null && t.FocusOmnibox) t.OmniboxUserTyped = true;
+                // Enable suggest after the first character is already in the box.
+                // Turning it on during the first KeyPress can swallow that character.
+                if (addressBox.Text.Length >= 1 && addressBox.AutoCompleteMode != AutoCompleteMode.Suggest)
                     addressBox.AutoCompleteMode = AutoCompleteMode.Suggest;
             };
             addressBox.KeyDown += (_, e) =>
@@ -485,7 +513,7 @@ namespace Ceprkac
                 addressBox.AutoCompleteMode = AutoCompleteMode.None;
                 NavigateCurrentTab(addressBox.Text);
                 var t = ActiveTab;
-                if (t != null) t.FocusOmnibox = false;
+                if (t != null) { t.FocusOmnibox = false; t.OmniboxUserTyped = false; }
             };
             addressHost = new ToolStripControlHost(addressBox)
             {
@@ -524,6 +552,7 @@ namespace Ceprkac
             menuBtn.DropDownItems.Add(new ToolStripSeparator());
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("DevTools", null, (_, _) => ActiveTab?.WebView.CoreWebView2?.OpenDevToolsWindow()) { ShortcutKeys = Keys.Control | Keys.I, ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("Change Search Engine...", null, (_, _) => { ShowSearchEnginePicker(); }) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Set as Default Browser...", null, (_, _) => SetAsDefaultBrowser()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuBtn.DropDownItems.Add(new ToolStripSeparator());
             menuBtn.DropDownItems.Add(new ToolStripMenuItem("Exit", null, (_, _) => Close()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
 
@@ -584,8 +613,14 @@ namespace Ceprkac
             KeyPreview = true;
             KeyDown += MainForm_KeyDown;
             KeyPress += MainForm_KeyPress;
+            Application.AddMessageFilter(this);
             Load += (_, _) => InitializeAsync();
-            FormClosing += (_, _) => { SaveWindowState(); moduleCleaner?.Stop(); };
+            FormClosing += (_, _) =>
+            {
+                Application.RemoveMessageFilter(this);
+                SaveWindowState();
+                moduleCleaner?.Stop();
+            };
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -608,6 +643,7 @@ namespace Ceprkac
             else if (e.KeyCode == Keys.Escape && ActiveTab?.FocusOmnibox == true)
             {
                 ActiveTab.FocusOmnibox = false;
+                ActiveTab.OmniboxUserTyped = false;
                 try { ActiveTab.WebView.Focus(); } catch { }
                 e.Handled = true;
             }
@@ -651,7 +687,7 @@ namespace Ceprkac
                 try
                 {
                     var envOpts = new CoreWebView2EnvironmentOptions(
-                        "--no-first-run --disable-sync --disable-background-networking");
+                        "--no-first-run --disable-sync --disable-background-networking --disable-features=msSmartScreenProtection");
                     sharedEnvironment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, envOpts);
                 }
                 catch (Exception createEx)
@@ -665,7 +701,14 @@ namespace Ceprkac
                     }
                     throw new Exception(createEx.Message, createEx);
                 }
-                AddNewTab(homePageUrl);
+                if (pendingExternalUrls.Count > 0)
+                {
+                    var urls = pendingExternalUrls.ToArray();
+                    pendingExternalUrls.Clear();
+                    foreach (var u in urls) AddNewTab(u, focusOmnibox: false);
+                }
+                else
+                    AddNewTab(homePageUrl);
             }
             catch (Exception ex)
             {
@@ -885,6 +928,8 @@ namespace Ceprkac
         private void SetAddressText(string? url)
         {
             url = url ?? "";
+            var tab = ActiveTab;
+            if (tab != null && tab.FocusOmnibox && tab.OmniboxUserTyped) return;
             if (addressBox.Text == url) return;
             addressBox.AutoCompleteMode = AutoCompleteMode.None;
             addressBox.Text = url;
@@ -895,21 +940,139 @@ namespace Ceprkac
             var tab = ActiveTab;
             if (tab == null || !tab.FocusOmnibox || addressBox.Focused) return;
             if (char.IsControl(e.KeyChar)) return;
-            if (addressBox.SelectionLength == addressBox.Text.Length || !OmniboxHasUserQuery(tab))
-                addressBox.Text = e.KeyChar.ToString();
+            ApplyOmniboxChar(e.KeyChar);
+            e.Handled = true;
+        }
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            var tab = ActiveTab;
+            if (tab == null || !tab.FocusOmnibox) return false;
+            if (addressBox.Focused) return false;
+            if (findBar.Visible && findInput.Focused) return false;
+            if (m.HWnd == IntPtr.Zero) return false;
+            if (IsAddressBoxHwnd(m.HWnd)) return false;
+            if (!IsOurHwnd(m.HWnd)) return false;
+
+            if (m.Msg == WM_CHAR || m.Msg == WM_DEADCHAR || m.Msg == WM_UNICHAR)
+            {
+                char c = (char)(m.WParam.ToInt32() & 0xFFFF);
+                if (char.IsControl(c) && c != '\b') return false;
+                ApplyOmniboxChar(c);
+                return true;
+            }
+
+            if (m.Msg != WM_KEYDOWN) return false;
+            var key = (Keys)(m.WParam.ToInt32() & 0xFFFF);
+            var mods = ModifierKeys;
+            if ((mods & Keys.Control) != 0 || (mods & Keys.Alt) != 0) return false;
+            if (key == Keys.Escape || key == Keys.Tab) return false;
+            if (key == Keys.Enter)
+            {
+                addressBox.AutoCompleteMode = AutoCompleteMode.None;
+                NavigateCurrentTab(addressBox.Text);
+                tab.FocusOmnibox = false;
+                tab.OmniboxUserTyped = false;
+                return true;
+            }
+            if (key == Keys.Back)
+            {
+                ApplyOmniboxChar('\b');
+                return true;
+            }
+            // Keep KEYDOWN flowing so TranslateMessage still emits WM_CHAR
+            // (which we redirect above). Pull focus back so later keys land
+            // in the omnibox without SelectAll wiping what was typed.
+            FocusAddressBar(selectAll: !tab.OmniboxUserTyped);
+            return false;
+        }
+
+        private bool IsAddressBoxHwnd(IntPtr hwnd)
+        {
+            try
+            {
+                if (hwnd == addressBox.Handle) return true;
+                return IsChild(addressBox.Handle, hwnd);
+            }
+            catch { return false; }
+        }
+
+        private bool IsOurHwnd(IntPtr hwnd)
+        {
+            try
+            {
+                if (hwnd == Handle || IsChild(Handle, hwnd)) return true;
+                if (GetAncestor(hwnd, GA_ROOT) == Handle) return true;
+                foreach (var t in tabStrip.Tabs)
+                {
+                    try
+                    {
+                        var wh = t.WebView.Handle;
+                        if (hwnd == wh || IsChild(wh, hwnd)) return true;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private void ApplyOmniboxChar(char c)
+        {
+            var tab = ActiveTab;
+            if (tab == null) return;
+            string text = addressBox.Text ?? "";
+            int start = addressBox.SelectionStart;
+            int len = addressBox.SelectionLength;
+            if (start < 0 || start > text.Length) start = text.Length;
+            if (len < 0 || start + len > text.Length) len = text.Length - start;
+
+            if (c == '\b')
+            {
+                if (len > 0)
+                {
+                    text = text.Remove(start, len);
+                    addressBox.Text = text;
+                    addressBox.SelectionStart = start;
+                }
+                else if (start > 0)
+                {
+                    text = text.Remove(start - 1, 1);
+                    addressBox.Text = text;
+                    addressBox.SelectionStart = start - 1;
+                }
+            }
             else
             {
-                int i = addressBox.SelectionStart;
-                addressBox.Text = addressBox.Text.Insert(Math.Max(0, i), e.KeyChar.ToString());
-                addressBox.SelectionStart = i + 1;
+                bool replaceAll = !tab.OmniboxUserTyped || len == text.Length;
+                if (replaceAll)
+                {
+                    text = c.ToString();
+                    start = 1;
+                }
+                else if (len > 0)
+                {
+                    text = text.Remove(start, len).Insert(start, c.ToString());
+                    start += 1;
+                }
+                else
+                {
+                    text = text.Insert(start, c.ToString());
+                    start += 1;
+                }
+                addressBox.Text = text;
+                addressBox.SelectionStart = start;
             }
+            addressBox.SelectionLength = 0;
+            tab.OmniboxUserTyped = true;
             FocusAddressBar(selectAll: false);
-            e.Handled = true;
         }
 
         private void FocusAddressBar(bool selectAll = true)
         {
             if (addressBox.IsDisposed) return;
+            var tab = ActiveTab;
+            if (tab != null && tab.OmniboxUserTyped) selectAll = false;
             try { navToolStrip.Focus(); } catch { }
             addressBox.Focus();
             if (selectAll) addressBox.SelectAll();
@@ -922,6 +1085,7 @@ namespace Ceprkac
 
         private bool OmniboxHasUserQuery(BrowserTab tab)
         {
+            if (tab.OmniboxUserTyped) return true;
             var text = (addressBox.Text ?? "").Trim();
             if (text.Length == 0) return false;
             if (string.Equals(text, tab.Url, StringComparison.OrdinalIgnoreCase)) return false;
@@ -929,7 +1093,56 @@ namespace Ceprkac
             return true;
         }
 
-        private async void AddNewTab(string url, int? insertAfter = null)
+        public void RestoreAndFocus()
+        {
+            if (IsDisposed) return;
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Show();
+            Activate();
+            BringToFront();
+            try
+            {
+                ShowWindow(Handle, SW_RESTORE);
+                SetForegroundWindow(Handle);
+            }
+            catch { }
+        }
+
+        public void OpenExternalUrl(string url)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OpenExternalUrl(url)));
+                return;
+            }
+            RestoreAndFocus();
+            if (string.IsNullOrWhiteSpace(url)) return;
+            if (sharedEnvironment == null)
+            {
+                pendingExternalUrls.Add(url);
+                return;
+            }
+            AddNewTab(url, focusOmnibox: false);
+        }
+
+        private void SetAsDefaultBrowser()
+        {
+            try
+            {
+                BrowserRegistration.RegisterAndRequestDefault();
+                statusLabel.Text = BrowserRegistration.IsDefault()
+                    ? "Ceprkac is the default browser."
+                    : "Pick Ceprkac under http / https in Windows Settings.";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Could not register as default browser:\r\n" + ex.Message,
+                    "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private async void AddNewTab(string url, int? insertAfter = null, bool focusOmnibox = true)
         {
             if (sharedEnvironment == null) return;
             var webView = new WebView2
@@ -939,7 +1152,7 @@ namespace Ceprkac
                 TabStop = false,
                 DefaultBackgroundColor = Theme.ActiveTab,
             };
-            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = true };
+            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = focusOmnibox, OmniboxUserTyped = false };
 
             int insertIndex = insertAfter.HasValue ? insertAfter.Value + 1
                 : tabStrip.SelectedIndex >= 0 ? tabStrip.SelectedIndex + 1
@@ -953,19 +1166,20 @@ namespace Ceprkac
                 if (!tab.FocusOmnibox) return;
                 try
                 {
+                    // Steal focus back immediately so the next keystroke does not
+                    // land in the page. BeginInvoke is a second pass after layout.
+                    FocusAddressBar(selectAll: !tab.OmniboxUserTyped);
                     BeginInvoke(new Action(() =>
                     {
                         if (IsDisposed || !tab.FocusOmnibox || ActiveTab != tab) return;
-                        FocusAddressBar(selectAll: !OmniboxHasUserQuery(tab));
+                        FocusAddressBar(selectAll: !tab.OmniboxUserTyped);
                     }));
                 }
                 catch { }
             };
 
-            // Focus the omnibox immediately so the first typed character is not
-            // eaten while WebView2 is still starting (or by the homepage).
             SwitchToTab(insertIndex);
-            FocusAddressBar(selectAll: true);
+            if (focusOmnibox) FocusAddressBar(selectAll: true);
 
             try
             {
@@ -974,12 +1188,27 @@ namespace Ceprkac
                 if (core != null)
                 {
                     core.NavigationStarting += (_, _) => { tab.IsLoading = true; tab.LoadProgress = 10; if (ActiveTab == tab) statusLabel.Text = "Loading..."; tabStrip.Invalidate(); };
-                    core.NavigationCompleted += (_, _) => { tab.IsLoading = false; tab.LoadProgress = 100; UpdateTabState(tab); tabStrip.Invalidate(); TryAutoFillCredentials(tab); InjectAdElementHider(tab); };
+                    core.NavigationCompleted += (_, e) =>
+                    {
+                        tab.IsLoading = false;
+                        tab.LoadProgress = 100;
+                        UpdateTabState(tab);
+                        tabStrip.Invalidate();
+                        if (!e.IsSuccess)
+                        {
+                            if (ActiveTab == tab && e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+                                statusLabel.Text = "Page failed to load (" + e.WebErrorStatus + ")";
+                            return;
+                        }
+                        TryAutoFillCredentials(tab);
+                        InjectAdElementHider(tab);
+                    };
                     core.DocumentTitleChanged += (_, _) => { tab.Title = core.DocumentTitle ?? "New Tab"; if (ActiveTab == tab) Text = tab.Title + " - Ceprkac"; tabStrip.Invalidate(); };
                     core.SourceChanged += (_, _) =>
                     {
                         tab.Url = core.Source ?? "";
-                        if (ActiveTab == tab && !addressBox.Focused) SetAddressText(tab.Url);
+                        if (ActiveTab == tab && !(addressBox.Focused || (tab.FocusOmnibox && tab.OmniboxUserTyped)))
+                            SetAddressText(tab.Url);
                     };
                     core.NewWindowRequested += (_, args) =>
                     {
@@ -1092,6 +1321,7 @@ namespace Ceprkac
             {
                 var prev = tabStrip.Tabs[tabStrip.SelectedIndex];
                 prev.FocusOmnibox = false;
+                prev.OmniboxUserTyped = false;
                 prev.WebView.Visible = false;
             }
             tabStrip.SelectedIndex = index;
@@ -1295,9 +1525,10 @@ namespace Ceprkac
                 url = "https://" + url;
             }
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
-            tab.WebView.CoreWebView2?.Navigate(uri.ToString());
             tab.Url = uri.ToString();
-            if (ActiveTab == tab && !addressBox.Focused)
+            if (tab.WebView.CoreWebView2 != null)
+                tab.WebView.CoreWebView2.Navigate(uri.ToString());
+            if (ActiveTab == tab && !(addressBox.Focused || (tab.FocusOmnibox && tab.OmniboxUserTyped)))
                 SetAddressText(uri.ToString());
             AddToHistory(uri.ToString());
         }
@@ -2545,6 +2776,7 @@ namespace Ceprkac
         private static readonly HashSet<string> AdBlockWhitelist = new(StringComparer.OrdinalIgnoreCase)
         {
             "discord.com", "discordapp.com", "discordapp.net", "discord.gg", "discord.media",
+            "cloudflare.com", "challenges.cloudflare.com", "cdnjs.cloudflare.com",
             "youtube-nocookie.com",
             "apple.com", "icloud.com",
             "ebay.com",
@@ -2705,31 +2937,13 @@ namespace Ceprkac
                 catch { }
             };
 
-            // Inject YouTube ad blocker into main world via DevTools Protocol
-            // Page.addScriptToEvaluateOnNewDocument runs in the main world BEFORE any page scripts
-            _ = InjectYouTubeMainWorldBlocker(core);
+            // YouTube ad blocker: script-tag injector with a hostname guard.
+            // Do not use CDP Page.addScriptToEvaluateOnNewDocument — Cloudflare
+            // treats an attached DevTools session as a bot and some forums never load.
+            _ = core.AddScriptToExecuteOnDocumentCreatedAsync(YouTubeMainWorldInjectorJs);
 
             // Inject fetch/XHR blocker into main world via DevTools Protocol
             core.NavigationCompleted += (_, _) => InjectMainWorldBlocker(core);
-        }
-
-        private static async Task InjectYouTubeMainWorldBlocker(CoreWebView2 core)
-        {
-            try
-            {
-                // Page.addScriptToEvaluateOnNewDocument injects into the MAIN world
-                // before any page scripts run — critical for intercepting ytInitialData.
-                // The JS itself has a strict YouTube-only hostname guard + auth domain exclusion
-                // so it completely no-ops on auth popups, OAuth flows, etc.
-                string escapedJs = YouTubeMainWorldCode.Replace("\\", "\\\\").Replace("\"", "\\\"");
-                string cdpParams = "{\"source\":\"" + escapedJs + "\"}";
-                await core.CallDevToolsProtocolMethodAsync("Page.addScriptToEvaluateOnNewDocument", cdpParams);
-            }
-            catch
-            {
-                // Fallback to AddScriptToExecuteOnDocumentCreatedAsync with <script> tag injection
-                _ = core.AddScriptToExecuteOnDocumentCreatedAsync(YouTubeMainWorldInjectorJs);
-            }
         }
 
         private const string AdElementHiderJs = @"(function() {
@@ -2918,9 +3132,8 @@ namespace Ceprkac
         })()";
 
         // Main-world YouTube ad blocker — built at runtime to handle nested quotes cleanly
-        // Raw main-world code (no <script> tag wrapper) for Page.addScriptToEvaluateOnNewDocument
         private static readonly string YouTubeMainWorldCode = BuildYouTubeMainWorldCode();
-        // Fallback: wraps the main world code in a <script> tag for AddScriptToExecuteOnDocumentCreatedAsync
+        // Hostname-guarded <script> injector for AddScriptToExecuteOnDocumentCreatedAsync
         private static readonly string YouTubeMainWorldInjectorJs = BuildYouTubeInjector();
 
         private static string BuildYouTubeMainWorldCode()
@@ -3031,10 +3244,27 @@ namespace Ceprkac
             await Task.CompletedTask;
         }
 
+        private static bool IsChallengePage(CoreWebView2 core)
+        {
+            try
+            {
+                var src = (core.Source ?? "").ToLowerInvariant();
+                if (src.Contains("cdn-cgi/") || src.Contains("__cf_chl") || src.Contains("challenges.cloudflare"))
+                    return true;
+                var title = (core.DocumentTitle ?? "").ToLowerInvariant();
+                if (title.Contains("just a moment") || title.Contains("attention required") ||
+                    title.Contains("checking your browser") || title.Contains("please wait"))
+                    return true;
+            }
+            catch { }
+            return false;
+        }
+
         private async void InjectMainWorldBlocker(CoreWebView2 core)
         {
             if (BlockedAdDomains.Count == 0) return;
-            // Skip YouTube — it gets its own dedicated DevTools main-world injection
+            if (IsChallengePage(core)) return;
+            // Skip YouTube — it gets its own dedicated main-world injection
             try
             {
                 var pageHost = new Uri(core.Source ?? "").Host.ToLower();
@@ -3064,7 +3294,7 @@ namespace Ceprkac
                     first = false;
                 }
                 sb.Append("]);");
-                sb.Append("var wl=new Set(['google.com','youtube.com','accounts.google.com','apis.google.com','ssl.gstatic.com','gstatic.com','discord.com','discordapp.com','github.com','paypal.com','ebay.com','apple.com','icloud.com','mediafire.com','login.microsoftonline.com','login.live.com','pay.google.com','gog.com','steampowered.com','steamcommunity.com','epicgames.com','ea.com','origin.com','ubisoft.com','blizzard.com','battle.net','riotgames.com','xbox.com','playstation.com','nintendo.com','twitch.tv','chase.com','bankofamerica.com','wellsfargo.com','citibank.com','capitalone.com','revolut.com','wise.com','stripe.com','n26.com']);");
+                sb.Append("var wl=new Set(['google.com','youtube.com','accounts.google.com','apis.google.com','ssl.gstatic.com','gstatic.com','discord.com','discordapp.com','github.com','paypal.com','ebay.com','apple.com','icloud.com','mediafire.com','login.microsoftonline.com','login.live.com','pay.google.com','gog.com','steampowered.com','steamcommunity.com','epicgames.com','ea.com','origin.com','ubisoft.com','blizzard.com','battle.net','riotgames.com','xbox.com','playstation.com','nintendo.com','twitch.tv','chase.com','bankofamerica.com','wellsfargo.com','citibank.com','capitalone.com','revolut.com','wise.com','stripe.com','n26.com','cloudflare.com','challenges.cloudflare.com']);");
                 sb.Append("function isWl(h){while(h){if(wl.has(h))return 1;var i=h.indexOf('.');if(i<0)break;h=h.substr(i+1);}return 0};");
                 sb.Append("function chk(u){try{if(isWl(location.hostname))return 0;var l=u.toLowerCase();var h=new URL(l).hostname;if(isWl(h))return 0;while(h){if(b.has(h))return 1;var i=h.indexOf('.');if(i<0)break;h=h.substr(i+1);}");
                 sb.Append("if(/(\\/ads?\\/|\\/ad[sx]?\\b|\\/pagead\\/|\\/ptracking|\\/advert|\\/sponsored|\\/promotion|\\/tracking\\/|\\/analytics\\/|\\/collect\\?|\\/beacon|\\/pixel|\\/imp\\?|\\/impression|\\/click\\?|ad_banner|ad_frame|sponsored_content|promo_banner|[?&](ad|ads|adunit|adformat|adtag)=)/i.test(l))return 1;");
@@ -3094,6 +3324,7 @@ namespace Ceprkac
             {
                 var core = tab.WebView.CoreWebView2;
                 if (core == null) return;
+                if (IsChallengePage(core)) return;
                 var url = core.Source ?? "";
                 string pageHost = "";
                 try { pageHost = new Uri(url).Host.ToLower(); } catch { }

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.8 — 2026-08-23
+
+Installer: `Ceprkac-0.6.8-Setup.exe`
+
+### Default browser
+
+- Registers as a Windows browser (http, https, HTML files) so it appears in Settings → Default apps.
+- Installer checkbox **Set Ceprkac as the default browser** (on by default). Windows 10/11 still needs one confirmation in Settings — the picker opens automatically.
+- Menu → **Set as Default Browser...** does the same later.
+- Single-instance: clicking a link opens a tab in the running window instead of a second process.
+- Command line: `Ceprkac.exe https://example.com` and `Ceprkac.exe --register-browser`.
+
+### Address bar
+
+- New-tab typing no longer drops the first character (`cakes` no longer becomes `akes`).
+- Keys are intercepted before WebView2 while the omnibox is focused, so the homepage search box cannot steal them.
+- Homepage / source updates do not overwrite text you already typed, and refocus does not Select-All over it.
+
+### Pages that would not open
+
+- SmartScreen URL checks are off (same as GBrowser / Chrome). Warez-adjacent forums such as TeamOS were being blocked or left blank.
+- Stopped attaching Chrome DevTools (`Page.addScriptToEvaluateOnNewDocument`) on every tab. Cloudflare treats that as a bot and some threads never finished loading.
+- Cloudflare challenge pages are not ad-blocked or script-injected.
+- Failed navigations show the error in the status bar instead of a silent blank page.
+
+---
+
 ## 0.6.7 — 2026-08-23
 
 Installer: `Ceprkac-0.6.7-Setup.exe`

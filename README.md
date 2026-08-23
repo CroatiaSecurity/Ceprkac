@@ -2,11 +2,11 @@
 
 A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and **WebView2**. Same UI and features as [GBrowser](https://github.com/CroatiaSecurity/GBrowser), with Edge codecs so **H.264 / AAC** actually play (Discord embeds, typical HTML5 players).
 
-[![version](https://img.shields.io/badge/version-0.6.7-blue?style=flat-square)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.6.8-blue?style=flat-square)](CHANGELOG.md)
 [![.NET](https://img.shields.io/badge/.NET-Framework%204.8-512BD4?style=flat-square)](#requirements)
 [![engine](https://img.shields.io/badge/engine-WebView2%20(Chromium)-orange?style=flat-square)](#requirements)
 
-**Download:** [Ceprkac 0.6.7 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
+**Download:** [Ceprkac 0.6.8 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
 
 ---
 
@@ -18,6 +18,7 @@ A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and
 - Network + DOM ad blocking (`blocklist.txt`); passkeys dismissed
 - Injected-module cleaner: unloads foreign DLLs from **this process and its children only**
 - WebView2 Evergreen Runtime auto-installed if missing
+- Optional **default browser**: http/https + HTML files; links open in the existing window
 
 | Shortcut | Action | Shortcut | Action |
 |---|---|---|---|
@@ -38,7 +39,19 @@ dotnet run --project Ceprkac.csproj
 build.bat
 ```
 
-Output: `releases\0.6.7\Ceprkac-0.6.7-Setup.exe`
+Output: `releases\0.6.8\Ceprkac-0.6.8-Setup.exe`
+
+## Default browser
+
+The installer offers **Set Ceprkac as the default browser**. That registers http, https, and HTML files and opens Windows Settings so you can confirm (Windows 10/11 do not allow a silent switch).
+
+Later: menu → **Set as Default Browser...**, or:
+
+```bat
+Ceprkac.exe --register-browser
+```
+
+Opening a link while Ceprkac is already running adds a tab in that window.
 
 ## Data
 
