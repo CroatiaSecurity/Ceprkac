@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.1 — 2026-08-24
+
+Installer: `Ceprkac-0.7.1-Setup.exe`
+
+The module cleaner is the browser backbone again. Kiro registered `LdrRegisterDllNotification` and left an empty callback; children only lost Temp/AppData DLLs; freeze-after-2s grandfathered anything mapped during WebView2 startup.
+
+### Module identity (immediate unload)
+
+- LDR callback **queues** path+base (never `FreeLibrary` under the loader lock) and the worker unloads on the next pulse.
+- A module stays only if it is: this process image, a keep-tree (Windows / Edge WebView / WebView2 user-data / .NET / GPU), a GPU ICD name, a **bundled** Ceprkac filename (`WebView2Loader`, `Microsoft.*`, `System.*`), or Microsoft/NVIDIA/Google/Intel-family **WinVerifyTrust** from Program Files.
+- `version.dll` (and the rest of the sideload set) next to `Ceprkac.exe` is unloaded unless Microsoft-signed.
+- Unsigned `evil.dll` in the Ceprkac directory is unloaded.
+- WebView2 children use the **same** identity check — not "Temp only".
+- Remote unload prefers `QueueUserAPC(FreeLibrary)` (same as Sentinel). `CreateRemoteThread` is fallback only.
+- `%AppData%\Ceprkac\WebView2UserData` is a keep tree so Widevine/Crashpad are not fight-unloaded.
+
+---
+
 ## 0.7.0 — 2026-08-24
 
 Installer: `Ceprkac-0.7.0-Setup.exe`

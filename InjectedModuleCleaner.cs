@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32;
@@ -10,18 +12,17 @@ using Microsoft.Win32;
 namespace Ceprkac
 {
     /// <summary>
-    /// Unload foreign DLLs from Ceprkac and its children the moment they are
-    /// mapped — including at process start. Infectors are expected then, so
-    /// nothing is grandfathered by a late snapshot.
+    /// Backbone: every mapped module is identified (keep-tree / bundled /
+    /// Microsoft-family signature) and foreign ones are unloaded immediately.
     ///
-    /// Keep: this exe's directory, Edge WebView2, Windows, .NET, GPU vendors.
-    /// Unload: Temp / AppData / Downloads overlays in this process and children
-    /// (WebView2 GPU/renderer included). Unresolvable paths are skipped so a
-    /// lookup miss cannot FreeLibrary a GPU/codec module.
-    /// After the host settles, unknown mappings in this process are also
-    /// unloaded unless they belong to those trees. Children keep only the
-    /// Temp/AppData/Downloads rule — freeze-unloading unknown Program Files
-    /// modules from the GPU process blanks the window every few seconds.
+    /// In-process loads hit <see cref="LdrRegisterDllNotification"/> and are
+    /// queued (never FreeLibrary under the loader lock). A 50 ms sweep covers
+    /// children and manual maps that skip LdrLoadDll.
+    ///
+    /// Keep: this exe dir (bundled names only if unsigned), Edge WebView2,
+    /// WebView2 user-data, Windows, .NET, GPU vendors.
+    /// Children use the same identity check — not "Temp only".
+    /// Empty paths are skipped so a lookup miss cannot unmap a GPU ICD.
     /// </summary>
     internal sealed class InjectedModuleCleaner
     {
@@ -29,29 +30,27 @@ namespace Ceprkac
 
         private const string WebView2ClientGuid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
         private const int PollMs = 50;
-        private const int StablePollsNeeded = 40;
+        private const uint LdrLoaded = 1;
+        private const uint ThreadSetContext = 0x0010;
 
         private readonly HashSet<IntPtr> _ours = new();
         private readonly HashSet<IntPtr> _attempted = new();
         private readonly Dictionary<int, ChildState> _children = new();
         private readonly List<string> _prefixes = new();
-        private readonly List<string> _userProfilePrefixes = new();
+        private readonly ConcurrentQueue<(IntPtr Base, string Path)> _ldrQueue = new();
         private readonly ManualResetEventSlim _stop = new(false);
+        private readonly AutoResetEvent _pulse = new(false);
         private readonly object _startLock = new();
         private Thread? _thread;
         private IntPtr _ldrCookie;
         private LdrDllNotification? _ldrCb;
         private Dictionary<string, string>? _dosDevices;
-        private bool _hostFrozen;
-        private int _hostLastCount;
-        private int _hostStablePolls;
+        private string _selfDir = "";
+        private string _selfImage = "";
 
         private sealed class ChildState
         {
             public HashSet<IntPtr> Ours { get; } = new();
-            public bool Frozen;
-            public int LastCount;
-            public int StablePolls;
         }
 
         public static InjectedModuleCleaner StartGlobal()
@@ -79,6 +78,7 @@ namespace Ceprkac
         public void Stop()
         {
             _stop.Set();
+            _pulse.Set();
             UnregisterLdr();
             _thread?.Join(500);
         }
@@ -99,8 +99,20 @@ namespace Ceprkac
                 if (!_prefixes.Contains(n)) _prefixes.Add(n);
             }
 
-            add(AppDomain.CurrentDomain.BaseDirectory);
-            try { add(Path.GetDirectoryName(Process.GetCurrentProcess().MainModule?.FileName)); } catch { }
+            try
+            {
+                _selfImage = NormalizePath(Process.GetCurrentProcess().MainModule?.FileName);
+                _selfDir = DirOf(_selfImage);
+            }
+            catch
+            {
+                try
+                {
+                    _selfDir = NormalizePath(AppDomain.CurrentDomain.BaseDirectory);
+                }
+                catch { }
+            }
+
             try { add(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()); } catch { }
 
             add(Environment.GetFolderPath(Environment.SpecialFolder.Windows));
@@ -110,6 +122,7 @@ namespace Ceprkac
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\Microsoft\Edge");
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\Microsoft\Edge");
             add(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + @"\Microsoft\Edge");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + @"\Microsoft\EdgeCore");
             add(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\Microsoft\EdgeUpdate");
             add(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + @"\Microsoft\EdgeUpdate");
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\Microsoft\EdgeUpdate");
@@ -127,31 +140,135 @@ namespace Ceprkac
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\ATI Technologies");
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\Intel");
             add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) + @"\Intel");
+            add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Ceprkac", "WebView2UserData"));
             DiscoverEdgeRuntimeFolders(add);
-
-            void addUser(string? p)
-            {
-                var n = NormalizePath(p);
-                if (n.Length == 0) return;
-                if (!_userProfilePrefixes.Contains(n)) _userProfilePrefixes.Add(n);
-            }
-            addUser(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
-            addUser(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
-            addUser(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + @"\Downloads");
         }
 
-        private bool IsClearlyForeign(string path)
+        internal static bool IsBundledFileName(string? fileName)
         {
-            var n = NormalizePath(path);
-            if (n.Length == 0) return false;
-            if (IsTempPath(n)) return true;
-            foreach (var pre in _userProfilePrefixes)
+            if (string.IsNullOrEmpty(fileName)) return false;
+            var n = fileName!.ToLowerInvariant();
+            if (n == "ceprkac.exe" || n == "webview2loader.dll") return true;
+            if (n.StartsWith("microsoft.", StringComparison.Ordinal) && n.EndsWith(".dll", StringComparison.Ordinal))
+                return true;
+            if (n.StartsWith("system.", StringComparison.Ordinal) && n.EndsWith(".dll", StringComparison.Ordinal))
+                return true;
+            return false;
+        }
+
+        /// <summary>True = keep mapped. False = unload. Empty path = skip (do not unload).</summary>
+        internal bool IsAllowedModule(string? processImage, string? modulePath)
+        {
+            if (string.IsNullOrWhiteSpace(modulePath)) return true;
+            var mod = NormalizePath(modulePath);
+            if (mod.Length == 0) return true;
+
+            var image = NormalizePath(processImage);
+            if (image.Length > 0 && string.Equals(mod, image, StringComparison.Ordinal))
+                return true;
+
+            if (IsGpuIcdName(mod)) return true;
+            if (BelongsPath(mod)) return true;
+
+            var procDir = DirOf(image);
+            var modDir = DirOf(mod);
+            bool underApp = procDir.Length > 0 && (modDir.Equals(procDir, StringComparison.Ordinal)
+                || modDir.StartsWith(procDir + "\\", StringComparison.Ordinal));
+
+            string file;
+            try { file = Path.GetFileName(mod); }
+            catch { file = ""; }
+
+            if (underApp)
             {
-                if (n == pre || n.StartsWith(pre + "\\", StringComparison.Ordinal))
+                if (IsSideloadFileName(file) && !IsMicrosoftFamilySigned(mod))
+                    return false;
+                if (IsBundledFileName(file)) return true;
+                if (IsMicrosoftFamilySigned(mod)) return true;
+                // Unsigned random DLL next to Ceprkac.exe is a plant.
+                if (procDir.Equals(_selfDir, StringComparison.Ordinal))
+                    return false;
+                // Child (msedgewebview2) own directory: Edge ships many DLLs.
+                return true;
+            }
+
+            if (IsUserWritableDrop(mod)) return false;
+            if (IsMicrosoftFamilySigned(mod) && IsProgramFiles(mod)) return true;
+            return false;
+        }
+
+        private static bool IsSideloadFileName(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            switch (fileName.ToLowerInvariant())
+            {
+                case "dbghelp.dll":
+                case "version.dll":
+                case "winmm.dll":
+                case "dwrite.dll":
+                case "cryptsp.dll":
+                case "userenv.dll":
+                case "profapi.dll":
+                case "wtsapi32.dll":
+                case "dhcpcsvc.dll":
+                case "iphlpapi.dll":
+                case "msasn1.dll":
+                case "netapi32.dll":
+                case "samcli.dll":
+                case "sspicli.dll":
+                case "crypt32.dll":
+                case "textshaping.dll":
+                case "winhttp.dll":
+                case "urlmon.dll":
+                case "propsys.dll":
+                case "dwmapi.dll":
                     return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsUserWritableDrop(string n)
+        {
+            if (n.IndexOf("\\temp\\", StringComparison.Ordinal) >= 0) return true;
+            if (n.IndexOf("\\downloads\\", StringComparison.Ordinal) >= 0) return true;
+            if (n.IndexOf("\\desktop\\", StringComparison.Ordinal) >= 0) return true;
+            if (n.IndexOf("\\appdata\\", StringComparison.Ordinal) >= 0)
+            {
+                if (n.IndexOf("\\microsoft\\edge", StringComparison.Ordinal) >= 0) return false;
+                if (n.IndexOf("\\webview2userdata\\", StringComparison.Ordinal) >= 0) return false;
+                if (n.IndexOf("\\ebwebview\\", StringComparison.Ordinal) >= 0) return false;
+                return true;
             }
             return false;
         }
+
+        private static bool IsProgramFiles(string n) =>
+            n.IndexOf("\\program files\\", StringComparison.Ordinal) >= 0
+            || n.IndexOf("\\program files (x86)\\", StringComparison.Ordinal) >= 0;
+
+        private static bool IsMicrosoftFamilySigned(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return false;
+            if (!WinTrust.VerifyFile(path)) return false;
+            try
+            {
+#pragma warning disable SYSLIB0026
+                using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
+#pragma warning restore SYSLIB0026
+                var s = (cert.Subject ?? "") + (cert.Issuer ?? "");
+                return ContainsPublisher(s, "Microsoft")
+                    || ContainsPublisher(s, "NVIDIA")
+                    || ContainsPublisher(s, "Advanced Micro Devices")
+                    || ContainsPublisher(s, "Intel")
+                    || ContainsPublisher(s, "Google")
+                    || ContainsPublisher(s, "Chromium");
+            }
+            catch { return false; }
+        }
+
+        private static bool ContainsPublisher(string subject, string token) =>
+            subject.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
 
         private static void DiscoverEdgeRuntimeFolders(Action<string?> add)
         {
@@ -240,12 +357,33 @@ namespace Ceprkac
 
         private void Run()
         {
-            while (!_stop.Wait(PollMs))
+            WaitHandle[] waits = { _stop.WaitHandle, _pulse };
+            while (!_stop.IsSet)
             {
                 try
                 {
+                    DrainLdr();
                     SweepSelf();
                     SweepChildren();
+                }
+                catch { }
+                WaitHandle.WaitAny(waits, PollMs);
+            }
+        }
+
+        private void DrainLdr()
+        {
+            while (_ldrQueue.TryDequeue(out var item))
+            {
+                try
+                {
+                    if (item.Base == IntPtr.Zero) continue;
+                    if (IsAllowedModule(_selfImage, item.Path))
+                    {
+                        _ours.Add(item.Base);
+                        continue;
+                    }
+                    TryUnloadLocal(item.Base);
                 }
                 catch { }
             }
@@ -259,21 +397,18 @@ namespace Ceprkac
             foreach (var (h, path) in mods)
             {
                 if (h == IntPtr.Zero || h == self) continue;
-                if (BelongsPath(path))
+                if (IsAllowedModule(_selfImage, path))
                 {
                     _ours.Add(h);
                     continue;
                 }
                 if (NormalizePath(path).Length == 0) continue;
-                if (IsClearlyForeign(path) || _hostFrozen)
-                    TryUnloadLocal(h);
+                TryUnloadLocal(h);
             }
-            UpdateFrozen(ref _hostFrozen, ref _hostLastCount, ref _hostStablePolls, mods.Count);
         }
 
         private void SweepChildren()
         {
-            if (!_hostFrozen) return;
             var live = DescendantPids();
             foreach (var dead in new List<int>(_children.Keys))
                 if (!live.Contains(dead)) _children.Remove(dead);
@@ -290,42 +425,30 @@ namespace Ceprkac
                         st = new ChildState();
                         _children[pid] = st;
                     }
+                    string childImage = QueryImagePath(h);
                     var mods = EnumModules(h);
                     foreach (var (mh, path) in mods)
                     {
                         if (mh == IntPtr.Zero) continue;
-                        if (BelongsPath(path))
+                        if (IsAllowedModule(childImage, path))
                         {
                             st.Ours.Add(mh);
                             continue;
                         }
                         if (NormalizePath(path).Length == 0) continue;
-                        // Children (WebView2 GPU/renderer included): unload Temp / AppData /
-                        // Downloads overlays immediately. Do not freeze-unload unknown
-                        // Program Files modules — that unmapped the GPU driver every ~2s
-                        // and blanked the window. Host still freeze-unloads unknowns.
-                        if (IsClearlyForeign(path))
-                            TryUnloadRemote(h, mh);
+                        TryUnloadRemote(h, pid, mh);
                     }
-                    UpdateFrozen(ref st.Frozen, ref st.LastCount, ref st.StablePolls, mods.Count);
                 }
                 catch { }
                 finally { CloseHandle(h); }
             }
         }
 
-        private static void UpdateFrozen(ref bool frozen, ref int lastCount, ref int stablePolls, int count)
+        private string QueryImagePath(IntPtr proc)
         {
-            if (frozen || count == 0) return;
-            if (count != lastCount)
-            {
-                lastCount = count;
-                stablePolls = 0;
-                return;
-            }
-            stablePolls++;
-            if (stablePolls >= StablePollsNeeded)
-                frozen = true;
+            var buf = new char[32768];
+            int n = GetModuleFileNameEx(proc, IntPtr.Zero, buf, buf.Length);
+            return n > 0 ? new string(buf, 0, n) : "";
         }
 
         private HashSet<int> DescendantPids()
@@ -361,16 +484,43 @@ namespace Ceprkac
                 if (!FreeLibrary(hmod)) break;
         }
 
-        private void TryUnloadRemote(IntPtr proc, IntPtr hmod)
+        private void TryUnloadRemote(IntPtr proc, int pid, IntPtr hmod)
         {
             if (!_attempted.Add(hmod)) return;
             var k32 = GetModuleHandleW("kernel32.dll");
             var free = GetProcAddress(k32, "FreeLibrary");
             if (free == IntPtr.Zero) return;
+
+            // QueueUserAPC(FreeLibrary, thread, hmod) — same primitive Sentinel uses.
+            // CreateRemoteThread is the inject API we are defending against.
+            if (QueueFreeLibraryApc(pid, free, hmod))
+                return;
+
             var t = CreateRemoteThread(proc, IntPtr.Zero, UIntPtr.Zero, free, hmod, 0, out _);
             if (t == IntPtr.Zero) return;
             WaitForSingleObject(t, 100);
             CloseHandle(t);
+        }
+
+        private static bool QueueFreeLibraryApc(int pid, IntPtr freeLibrary, IntPtr hmod)
+        {
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                foreach (ProcessThread thread in p.Threads)
+                {
+                    IntPtr ht = OpenThread(ThreadSetContext, false, (uint)thread.Id);
+                    if (ht == IntPtr.Zero) continue;
+                    try
+                    {
+                        if (QueueUserAPC(freeLibrary, ht, hmod) != 0)
+                            return true;
+                    }
+                    finally { CloseHandle(ht); }
+                }
+            }
+            catch { }
+            return false;
         }
 
         private List<(IntPtr, string)> EnumModules(IntPtr proc)
@@ -411,6 +561,16 @@ namespace Ceprkac
             catch { return ""; }
         }
 
+        private static string DirOf(string normalizedPath)
+        {
+            try
+            {
+                var d = Path.GetDirectoryName(normalizedPath);
+                return string.IsNullOrEmpty(d) ? "" : d.TrimEnd('\\');
+            }
+            catch { return ""; }
+        }
+
         private string ToDosPath(string path)
         {
             if (!path.StartsWith(@"\Device\", StringComparison.OrdinalIgnoreCase))
@@ -447,13 +607,29 @@ namespace Ceprkac
 
         private void RegisterLdr()
         {
-            _ldrCb = (reason, data, ctx) =>
-            {
-                GC.KeepAlive(reason);
-                GC.KeepAlive(data);
-                GC.KeepAlive(ctx);
-            };
+            _ldrCb = OnLdr;
             LdrRegisterDllNotification(0, _ldrCb, IntPtr.Zero, out _ldrCookie);
+        }
+
+        /// <summary>
+        /// Loader-lock safe: copy path + base onto the queue, return.
+        /// Do not FreeLibrary, LoadLibrary, or allocate other modules here.
+        /// </summary>
+        private void OnLdr(uint reason, IntPtr data, IntPtr ctx)
+        {
+            if (reason != LdrLoaded || data == IntPtr.Zero) return;
+            try
+            {
+                var n = Marshal.PtrToStructure<LdrDllNotificationData>(data);
+                if (n.DllBase == IntPtr.Zero || n.FullDllName == IntPtr.Zero) return;
+                var us = Marshal.PtrToStructure<UnicodeStr>(n.FullDllName);
+                if (us.Buffer == IntPtr.Zero || us.Length < 2) return;
+                int chars = us.Length / 2;
+                string path = Marshal.PtrToStringUni(us.Buffer, chars) ?? "";
+                _ldrQueue.Enqueue((n.DllBase, path));
+                _pulse.Set();
+            }
+            catch { }
         }
 
         private void UnregisterLdr()
@@ -464,6 +640,24 @@ namespace Ceprkac
         }
 
         private delegate void LdrDllNotification(uint reason, IntPtr data, IntPtr ctx);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LdrDllNotificationData
+        {
+            public uint Flags;
+            public IntPtr FullDllName;
+            public IntPtr BaseDllName;
+            public IntPtr DllBase;
+            public uint SizeOfImage;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct UnicodeStr
+        {
+            public ushort Length;
+            public ushort MaximumLength;
+            public IntPtr Buffer;
+        }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct PROCESSENTRY32W
@@ -492,9 +686,91 @@ namespace Ceprkac
         private static extern int GetLongPathName(string lpszShortPath, StringBuilder lpszLongPath, int cchBuffer);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern uint QueryDosDevice(string lpDeviceName, StringBuilder lpTargetPath, int ucchMax);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenThread(uint access, bool inherit, uint tid);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint QueueUserAPC(IntPtr pfn, IntPtr thread, IntPtr data);
         [DllImport("psapi.dll", SetLastError = true)] private static extern bool EnumProcessModulesEx(IntPtr p, IntPtr[] m, int cb, out int n, uint f);
         [DllImport("psapi.dll", CharSet = CharSet.Unicode)] private static extern int GetModuleFileNameEx(IntPtr p, IntPtr m, [Out] char[] b, int s);
         [DllImport("ntdll.dll")] private static extern uint LdrRegisterDllNotification(uint f, LdrDllNotification cb, IntPtr ctx, out IntPtr cookie);
         [DllImport("ntdll.dll")] private static extern uint LdrUnregisterDllNotification(IntPtr cookie);
+    }
+
+    /// <summary>Authenticode check — subject-only is not enough (Kiro used that).</summary>
+    internal static class WinTrust
+    {
+        private static readonly Guid GenericVerifyV2 = new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
+
+        public static bool VerifyFile(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return false;
+            IntPtr pFile = IntPtr.Zero;
+            try
+            {
+                var fileInfo = new WinTrustFileInfo
+                {
+                    cbStruct = (uint)Marshal.SizeOf<WinTrustFileInfo>(),
+                    pcwszFilePath = path,
+                };
+                pFile = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustFileInfo>());
+                Marshal.StructureToPtr(fileInfo, pFile, false);
+
+                var data = new WinTrustData
+                {
+                    cbStruct = (uint)Marshal.SizeOf<WinTrustData>(),
+                    dwUIChoice = 2,
+                    fdwRevocationChecks = 0,
+                    dwUnionChoice = 1,
+                    pPolicyCallbackData = IntPtr.Zero,
+                    pSIPClientData = IntPtr.Zero,
+                    pFile = pFile,
+                    dwStateAction = 1,
+                    hWVTStateData = IntPtr.Zero,
+                    dwProvFlags = 0x20, // WTD_CACHE_ONLY_URL_RETRIEVAL
+                    pwszURLReference = null,
+                    pSignatureSettings = IntPtr.Zero,
+                };
+                var action = GenericVerifyV2;
+                uint r = WinVerifyTrust(IntPtr.Zero, ref action, ref data);
+                data.dwStateAction = 2;
+                WinVerifyTrust(IntPtr.Zero, ref action, ref data);
+                return r == 0;
+            }
+            catch { return false; }
+            finally
+            {
+                if (pFile != IntPtr.Zero) Marshal.FreeHGlobal(pFile);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WinTrustFileInfo
+        {
+            public uint cbStruct;
+            public string pcwszFilePath;
+            public IntPtr hFile;
+            public IntPtr pgKnownSubject;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WinTrustData
+        {
+            public uint cbStruct;
+            public IntPtr pPolicyCallbackData;
+            public IntPtr pSIPClientData;
+            public uint dwUIChoice;
+            public uint fdwRevocationChecks;
+            public uint dwUnionChoice;
+            public IntPtr pFile;
+            public uint dwStateAction;
+            public IntPtr hWVTStateData;
+            public string? pwszURLReference;
+            public uint dwProvFlags;
+            public uint dwUIContext;
+            public IntPtr pSignatureSettings;
+        }
+
+        [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = false, CharSet = CharSet.Unicode)]
+        private static extern uint WinVerifyTrust(IntPtr hwnd, ref Guid pgActionID, ref WinTrustData pWVTData);
     }
 }
