@@ -16,7 +16,7 @@ A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and
 - Omnibox search (Google, Bing, DuckDuckGo, Yahoo, Brave, Startpage)
 - Downloads with Save As; passwords (DPAPI) with auto-fill
 - Network + DOM ad blocking (`blocklist.txt`); passkeys dismissed
-- Injected-module cleaner: unloads foreign DLLs from **this process and its children only**
+- Injected-module cleaner (v0.7.1): **identity unload** on LDR load (queued, not under loader lock) and on WebView2 children — keep trees + bundled names + WinVerifyTrust; foreign/Temp/sideload plants `FreeLibrary` immediately
 - WebView2 Evergreen Runtime auto-installed if missing
 - Optional **default browser**: http/https + HTML files; links open in the existing window
 
