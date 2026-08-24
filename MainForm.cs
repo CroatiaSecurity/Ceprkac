@@ -113,42 +113,56 @@ namespace Ceprkac
         private const int TopPadding = 6;
         private const int LeftPadding = 8;
 
+        private float _dpi = 1f;
+        private int Dip(int v) => Math.Max(1, (int)Math.Round(v * _dpi));
+
         public ChromeTabStrip()
         {
             DoubleBuffered = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-            Height = TabHeight + TopPadding + 2;
             BackColor = Theme.TabBar;
             Font = new Font("Segoe UI", 8.5f);
+            ApplyDpiScale(1f);
+        }
+
+        /// <summary>Scale from 96-DPI design pixels. Always pass DeviceDpi/96, never the current height.</summary>
+        public void ApplyDpiScale(float scale)
+        {
+            if (scale < 0.5f || float.IsNaN(scale) || float.IsInfinity(scale)) scale = 1f;
+            _dpi = scale;
+            Font = new Font("Segoe UI", 8.5f);
+            Height = Dip(TabHeight + TopPadding + 2);
+            Invalidate();
         }
 
         private int GetTabWidth()
         {
-            if (Tabs.Count == 0) return TabMaxWidth;
-            int available = Width - LeftPadding - NewTabBtnWidth - 16;
+            if (Tabs.Count == 0) return Dip(TabMaxWidth);
+            int available = Width - Dip(LeftPadding) - Dip(NewTabBtnWidth) - Dip(16);
             int w = available / Math.Max(Tabs.Count, 1);
-            return Math.Max(TabMinWidth, Math.Min(TabMaxWidth, w));
+            return Math.Max(Dip(TabMinWidth), Math.Min(Dip(TabMaxWidth), w));
         }
 
         private Rectangle GetTabRect(int index)
         {
             int w = GetTabWidth();
-            int x = LeftPadding + index * (w + 1);
-            return new Rectangle(x, TopPadding, w, TabHeight);
+            int x = Dip(LeftPadding) + index * (w + 1);
+            return new Rectangle(x, Dip(TopPadding), w, Dip(TabHeight));
         }
 
         private Rectangle GetCloseRect(Rectangle tabRect)
         {
-            int x = tabRect.Right - CloseSize - 8;
-            int y = tabRect.Y + (tabRect.Height - CloseSize) / 2;
-            return new Rectangle(x, y, CloseSize, CloseSize);
+            int cs = Dip(CloseSize);
+            int x = tabRect.Right - cs - Dip(8);
+            int y = tabRect.Y + (tabRect.Height - cs) / 2;
+            return new Rectangle(x, y, cs, cs);
         }
 
         private Rectangle GetNewTabRect()
         {
             int w = GetTabWidth();
-            int x = LeftPadding + Tabs.Count * (w + 1);
-            return new Rectangle(x + 4, TopPadding + 4, NewTabBtnWidth, TabHeight - 8);
+            int x = Dip(LeftPadding) + Tabs.Count * (w + 1);
+            return new Rectangle(x + Dip(4), Dip(TopPadding) + Dip(4), Dip(NewTabBtnWidth), Dip(TabHeight) - Dip(8));
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -169,14 +183,15 @@ namespace Ceprkac
             // New tab button (+)
             var newRect = GetNewTabRect();
             using (var brush = new SolidBrush(Theme.InactiveTab))
-            using (var path = RoundedRect(newRect, 8))
+            using (var path = RoundedRect(newRect, Dip(8)))
                 g.FillPath(brush, path);
-            using (var pen = new Pen(Theme.ForeLight, 1.5f))
+            using (var pen = new Pen(Theme.ForeLight, Math.Max(1f, 1.5f * _dpi)))
             {
                 int cx = newRect.X + newRect.Width / 2;
                 int cy = newRect.Y + newRect.Height / 2;
-                g.DrawLine(pen, cx - 5, cy, cx + 5, cy);
-                g.DrawLine(pen, cx, cy - 5, cx, cy + 5);
+                int arm = Dip(5);
+                g.DrawLine(pen, cx - arm, cy, cx + arm, cy);
+                g.DrawLine(pen, cx, cy - arm, cx, cy + arm);
             }
 
             // Bottom line under inactive area
@@ -196,14 +211,14 @@ namespace Ceprkac
             bool hover = index == HoverIndex && !active;
             Color bg = active ? Theme.ActiveTab : (hover ? Theme.TabHover : Theme.InactiveTab);
 
-            int radius = active ? 10 : 8;
+            int radius = active ? Dip(10) : Dip(8);
             using (var path = RoundedRectTop(rect, radius))
             using (var brush = new SolidBrush(bg))
                 g.FillPath(brush, path);
 
             var tab = Tabs[index];
-            int textRight = rect.Right - CloseSize - 16;
-            int textLeft = rect.X + 12;
+            int textRight = rect.Right - Dip(CloseSize) - Dip(16);
+            int textLeft = rect.X + Dip(12);
             var textRect = new Rectangle(textLeft, rect.Y + 2, textRight - textLeft, rect.Height - 2);
             var textColor = active ? Theme.ForeLight : Theme.ForeDim;
             TextRenderer.DrawText(g, tab.Title, Font, textRect, textColor,
@@ -218,8 +233,8 @@ namespace Ceprkac
                     using var closeBrush = new SolidBrush(Theme.CloseHover);
                     g.FillEllipse(closeBrush, closeRect);
                 }
-                using var closePen = new Pen(closeHover ? Color.White : Theme.ForeDim, 1.2f);
-                int m = 4;
+                using var closePen = new Pen(closeHover ? Color.White : Theme.ForeDim, Math.Max(1f, 1.2f * _dpi));
+                int m = Dip(4);
                 g.DrawLine(closePen, closeRect.X + m, closeRect.Y + m, closeRect.Right - m, closeRect.Bottom - m);
                 g.DrawLine(closePen, closeRect.Right - m, closeRect.Y + m, closeRect.X + m, closeRect.Bottom - m);
             }
@@ -443,6 +458,7 @@ namespace Ceprkac
                     if (!string.IsNullOrWhiteSpace(u)) pendingExternalUrls.Add(u.Trim());
             }
             Text = "Ceprkac";
+            AutoScaleMode = AutoScaleMode.None;
             ClientSize = new Size(1280, 860);
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(600, 400);
@@ -565,7 +581,9 @@ namespace Ceprkac
             navToolStrip.Items.AddRange(new ToolStripItem[] { backBtn, fwdBtn, refreshBtn, new ToolStripSeparator(), addressHost, goBtn, new ToolStripSeparator(), bookmarkBtn, downloadsBtn, menuBtn });
             addressHost.AutoSize = false;
             SizeChanged += (_, _) => SizeAddressBox();
-            Shown += (_, _) => SizeAddressBox();
+            Shown += (_, _) => { ApplyChromeDpi(); SizeAddressBox(); };
+            HandleCreated += (_, _) => ApplyChromeDpi();
+            DpiChanged += (_, _) => ApplyChromeDpi();
 
             // Bookmarks bar (ToolStrip for nested folder support)
             bookmarksBar = new ToolStrip
@@ -900,6 +918,37 @@ namespace Ceprkac
         {
             if (moduleCleaner != null) return;
             moduleCleaner = InjectedModuleCleaner.Instance ?? InjectedModuleCleaner.StartGlobal();
+        }
+
+        private void ApplyChromeDpi()
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            float s = DeviceDpi / 96f;
+            if (s < 0.5f || float.IsNaN(s) || float.IsInfinity(s)) s = 1f;
+            int Dip(int v) => Math.Max(1, (int)Math.Round(v * s));
+
+            tabStrip.ApplyDpiScale(s);
+
+            navToolStrip.ImageScalingSize = new Size(Dip(16), Dip(16));
+            navToolStrip.Padding = new Padding(Dip(4));
+            navToolStrip.Height = Dip(40);
+            foreach (ToolStripItem item in new ToolStripItem[] { backBtn, fwdBtn, refreshBtn, goBtn, bookmarkBtn, downloadsBtn, menuBtn })
+            {
+                item.AutoSize = false;
+                item.Width = Dip(36);
+                item.Font = new Font("Segoe UI", item == refreshBtn || item == menuBtn ? 12f : 11f);
+            }
+            addressBox.Font = new Font("Segoe UI", 10f);
+            addressHost.Margin = new Padding(Dip(4));
+
+            bookmarksBar.ImageScalingSize = new Size(Dip(16), Dip(16));
+            bookmarksBar.Padding = new Padding(Dip(4), Dip(2), Dip(4), Dip(2));
+            bookmarksBar.Height = Dip(32);
+            bookmarksBar.Font = new Font("Segoe UI", 8f);
+
+            findBar.Height = Dip(32);
+            SizeAddressBox();
+            Invalidate(true);
         }
 
         private void SizeAddressBox()

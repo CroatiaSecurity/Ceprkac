@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.2 — 2026-08-24
+
+Installer: `Ceprkac-0.7.2-Setup.exe`
+
+### DPI chrome (4K @ 175%)
+
+- `AutoScaleMode.None` — WinForms no longer compounds ToolStrip/tab heights on each WebView2 DPI message.
+- Tab strip, toolbar, and bookmark bar sizes are `design-pixels × DeviceDpi/96`, reapplied from constants (not from the current height).
+- Bookmark/tab buttons no longer shrink over time.
+
+Sentinel 2.2.6 is required: 2.2.5 treated CLR JIT as ALLOCVM_REMOTE and killed Ceprkac with exit 80131506.
+
+---
+
 ## 0.7.1 — 2026-08-24
 
 Installer: `Ceprkac-0.7.1-Setup.exe`
