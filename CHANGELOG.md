@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.4 — 2026-08-25
+
+Installer: `Ceprkac-0.7.4-Setup.exe`
+
+### Chrome layout (4K @ 175%)
+
+GBrowser (Qt) was fine on the same display because it uses an HBox: nav buttons keep their size and the address bar stretches. Ceprkac's ToolStrip hosted the omnibox, so at 175% the right-side buttons (bookmark / downloads / menu) were clipped, and WebView2's fake `WM_DPICHANGED 96` left tabs + toolbar at 96-DPI sizes under a correctly-scaled Windows title bar.
+
+- Nav bar is a `TableLayoutPanel` (same structure as GBrowser's `QHBoxLayout`) — back / forward / reload / go / bookmark / downloads / menu cannot be eaten by the omnibox.
+- Tab strip, toolbar, bookmarks, and status use **monitor effective DPI** (`GetDpiForMonitor`), not `DeviceDpi` / WebView2's 96.
+- Fonts are pixel-sized (`GraphicsUnit.Pixel × dpi/96`) so they match the bar heights.
+- Bogus WebView2 DPI-96 messages are ignored so chrome cannot collapse after the first tab.
+- Nav buttons use custom vector `OnPaint` (`ChromeButton`) instead of Unicode glyphs that GDI+ misrenders at non-standard DPI.
+- PerMonitorV2 DPI awareness set at process level (`SetProcessDpiAwarenessContext`) as belt-and-suspenders alongside the app manifest.
+
+---
+
 ## 0.7.2 — 2026-08-24
 
 Installer: `Ceprkac-0.7.2-Setup.exe`

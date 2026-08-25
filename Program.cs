@@ -26,9 +26,17 @@ namespace Ceprkac
         private static MainForm? mainForm;
         private static Mutex? instanceMutex;
 
+        // ── Per-Monitor V2 DPI awareness (belt-and-suspenders alongside app.manifest) ──
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+        private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
+
         [STAThread]
         private static void Main(string[] args)
         {
+            // Ensure PerMonitorV2 even if manifest isn't applied (e.g. debugger attach)
+            try { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); } catch { }
+
             var parsed = ParseArgs(args);
             if (parsed.RegisterBrowser)
             {
@@ -40,14 +48,45 @@ namespace Ceprkac
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (_, e) =>
             {
-                try { MessageBox.Show(e.Exception.Message, "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                try
+                {
+                    LogException(e.Exception, "ThreadException");
+                    MessageBox.Show(FormatCrash(e.Exception), "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
                 catch { }
             };
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             {
-                try { MessageBox.Show((e.ExceptionObject as Exception)?.Message ?? "Unhandled error", "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                try
+                {
+                    var ex = e.ExceptionObject as Exception;
+                    LogException(ex, "UnhandledException");
+                    MessageBox.Show(FormatCrash(ex), "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
                 catch { }
             };
+
+            static string FormatCrash(Exception? ex)
+            {
+                if (ex == null) return "Unhandled error";
+                var msg = ex.Message;
+                if (string.IsNullOrWhiteSpace(msg)) msg = ex.GetType().Name;
+                return $"{ex.GetType().Name}: {msg}\r\n\r\n(Ditails saved to Ceprkac-crash.log in your temp folder)";
+            }
+
+            static void LogException(Exception? ex, string source)
+            {
+                try
+                {
+                    var path = Path.Combine(Path.GetTempPath(), "Ceprkac-crash.log");
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}");
+                    sb.AppendLine(ex?.ToString() ?? "null");
+                    sb.AppendLine(new string('-', 80));
+                    File.AppendAllText(path, sb.ToString());
+                }
+                catch { }
+            }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 

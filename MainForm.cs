@@ -76,6 +76,127 @@ namespace Ceprkac
         }
     }
 
+    internal enum ChromeIconKind { Back, Forward, Reload, Go, Star, Download, Menu }
+
+    /// <summary>Flat nav button. Icons are drawn as lines — WinForms GDI throws "Parameter is not valid" on several Unicode glyphs (↻ ≡) at 175% DPI.</summary>
+    internal sealed class ChromeButton : Button
+    {
+        public ChromeIconKind Kind { get; }
+        public bool StarFilled { get; set; }
+        public string Badge { get; set; } = "";
+        private bool _hover;
+
+        public ChromeButton(ChromeIconKind kind)
+        {
+            Kind = kind;
+            Text = "";
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            BackColor = Theme.Toolbar;
+            ForeColor = Color.White;
+            TabStop = false;
+            Cursor = Cursors.Hand;
+            Margin = new Padding(0);
+            Padding = new Padding(0);
+            UseVisualStyleBackColor = false;
+            AutoSize = false;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
+                | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            try
+            {
+                var g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                var rc = ClientRectangle;
+                if (rc.Width < 4 || rc.Height < 4) return;
+                using (var bg = new SolidBrush(_hover && Enabled ? Theme.TabHover : BackColor))
+                    g.FillRectangle(bg, rc);
+                var color = Enabled ? Color.White : Theme.ForeDim;
+                int side = Math.Max(8, Math.Min(rc.Width, rc.Height) * 5 / 10);
+                var icon = new Rectangle(rc.X + (rc.Width - side) / 2, rc.Y + (rc.Height - side) / 2, side, side);
+                using var pen = new Pen(color, Math.Max(1.4f, side / 10f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+                DrawKind(g, pen, color, icon);
+                if (!string.IsNullOrEmpty(Badge))
+                {
+                    using var f = new Font("Segoe UI", Math.Max(8f, rc.Height / 3.5f), FontStyle.Regular, GraphicsUnit.Pixel);
+                    TextRenderer.DrawText(g, Badge, f, rc, Theme.Accent,
+                        TextFormatFlags.Bottom | TextFormatFlags.Right | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                }
+            }
+            catch { }
+        }
+
+        private void DrawKind(Graphics g, Pen pen, Color color, Rectangle r)
+        {
+            int x = r.X, y = r.Y, w = r.Width, h = r.Height;
+            switch (Kind)
+            {
+                case ChromeIconKind.Back:
+                    g.DrawLines(pen, new[] { new Point(x + w * 2 / 3, y + h / 6), new Point(x + w / 4, y + h / 2), new Point(x + w * 2 / 3, y + h * 5 / 6) });
+                    break;
+                case ChromeIconKind.Forward:
+                    g.DrawLines(pen, new[] { new Point(x + w / 3, y + h / 6), new Point(x + w * 3 / 4, y + h / 2), new Point(x + w / 3, y + h * 5 / 6) });
+                    break;
+                case ChromeIconKind.Reload:
+                    int t = Math.Max(2, w / 6);
+                    g.DrawArc(pen, x + t, y + t, w - t * 2, h - t * 2, 45, 280);
+                    g.DrawLines(pen, new[] {
+                        new Point(x + w - t, y + h / 2),
+                        new Point(x + w - t, y + t),
+                        new Point(x + w * 2 / 3, y + t + 2)
+                    });
+                    break;
+                case ChromeIconKind.Go:
+                    using (var br = new SolidBrush(color))
+                    {
+                        g.FillPolygon(br, new[] {
+                            new Point(x + w / 5, y + h / 6),
+                            new Point(x + w * 4 / 5, y + h / 2),
+                            new Point(x + w / 5, y + h * 5 / 6)
+                        });
+                    }
+                    break;
+                case ChromeIconKind.Star:
+                    var star = StarPoints(r);
+                    if (StarFilled) { using var br = new SolidBrush(Theme.Accent); g.FillPolygon(br, star); }
+                    else g.DrawPolygon(pen, star);
+                    break;
+                case ChromeIconKind.Download:
+                    g.DrawLine(pen, x + w / 2, y + h / 6, x + w / 2, y + h * 2 / 3);
+                    g.DrawLines(pen, new[] { new Point(x + w / 4, y + h / 2), new Point(x + w / 2, y + h * 2 / 3), new Point(x + w * 3 / 4, y + h / 2) });
+                    g.DrawLine(pen, x + w / 5, y + h * 5 / 6, x + w * 4 / 5, y + h * 5 / 6);
+                    break;
+                case ChromeIconKind.Menu:
+                    int m = h / 5;
+                    g.DrawLine(pen, x + w / 5, y + m * 1, x + w * 4 / 5, y + m * 1);
+                    g.DrawLine(pen, x + w / 5, y + m * 2 + 1, x + w * 4 / 5, y + m * 2 + 1);
+                    g.DrawLine(pen, x + w / 5, y + m * 4, x + w * 4 / 5, y + m * 4);
+                    break;
+            }
+        }
+
+        private static Point[] StarPoints(Rectangle r)
+        {
+            var pts = new Point[10];
+            double cx = r.X + r.Width / 2.0, cy = r.Y + r.Height / 2.0;
+            double orad = Math.Min(r.Width, r.Height) / 2.0, irad = orad * 0.4;
+            for (int i = 0; i < 10; i++)
+            {
+                double a = -Math.PI / 2 + i * Math.PI / 5;
+                double rad = (i % 2 == 0) ? orad : irad;
+                pts[i] = new Point((int)Math.Round(cx + rad * Math.Cos(a)), (int)Math.Round(cy + rad * Math.Sin(a)));
+            }
+            return pts;
+        }
+    }
+
     // ───────────────────────── tab data model ───────────────────────────────
     internal sealed class BrowserTab
     {
@@ -125,14 +246,24 @@ namespace Ceprkac
             ApplyDpiScale(1f);
         }
 
-        /// <summary>Scale from 96-DPI design pixels. Always pass DeviceDpi/96, never the current height.</summary>
+        /// <summary>Scale from 96-DPI design pixels (Qt-style device-independent height). Always pass monitorDpi/96.</summary>
         public void ApplyDpiScale(float scale)
         {
             if (scale < 0.5f || float.IsNaN(scale) || float.IsInfinity(scale)) scale = 1f;
             _dpi = scale;
-            Font = new Font("Segoe UI", 8.5f);
-            Height = Dip(TabHeight + TopPadding + 2);
+            // Pixel fonts: GDI point fonts ignore PerMonitorV2 and stay 96-DPI tiny on 4K.
+            Font = new Font("Segoe UI", Math.Max(10f, 13f * _dpi), FontStyle.Regular, GraphicsUnit.Pixel);
+            int h = Dip(TabHeight + TopPadding + 2);
+            MinimumSize = new Size(0, h);
+            Height = h;
             Invalidate();
+        }
+
+        protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+        {
+            int min = Dip(TabHeight + TopPadding + 2);
+            if (height < min) height = min;
+            base.SetBoundsCore(x, y, width, height, specified);
         }
 
         private int GetTabWidth()
@@ -167,7 +298,12 @@ namespace Ceprkac
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            var g = e.Graphics;
+            try { PaintTabs(e.Graphics); }
+            catch { }
+        }
+
+        private void PaintTabs(Graphics g)
+        {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             g.Clear(Theme.TabBar);
@@ -344,7 +480,12 @@ namespace Ceprkac
         private static GraphicsPath RoundedRect(Rectangle r, int radius)
         {
             var path = new GraphicsPath();
-            int d = radius * 2;
+            if (r.Width < 2 || r.Height < 2)
+            {
+                if (r.Width > 0 && r.Height > 0) path.AddRectangle(r);
+                return path;
+            }
+            int d = Math.Max(2, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
             path.AddArc(r.X, r.Y, d, d, 180, 90);
             path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
             path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
@@ -356,7 +497,12 @@ namespace Ceprkac
         private static GraphicsPath RoundedRectTop(Rectangle r, int radius)
         {
             var path = new GraphicsPath();
-            int d = radius * 2;
+            if (r.Width < 2 || r.Height < 2)
+            {
+                if (r.Width > 0 && r.Height > 0) path.AddRectangle(r);
+                return path;
+            }
+            int d = Math.Max(2, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
             path.AddArc(r.X, r.Y, d, d, 180, 90);
             path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
             path.AddLine(r.Right, r.Bottom, r.X, r.Bottom);
@@ -399,8 +545,17 @@ namespace Ceprkac
         private static extern bool SetForegroundWindow(IntPtr hWnd);
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")]
+        private static extern uint GetDpiForWindow(IntPtr hwnd);
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+        [DllImport("shcore.dll")]
+        private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
         private const uint GA_ROOT = 2;
         private const int SW_RESTORE = 9;
+        private const uint MONITOR_DEFAULTTONEAREST = 2;
+        private const int MDT_EFFECTIVE_DPI = 0;
+        private const int WM_DPICHANGED = 0x02E0;
 
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_CHAR = 0x0102;
@@ -408,17 +563,29 @@ namespace Ceprkac
         private const int WM_UNICHAR = 0x0109;
 
         private readonly ChromeTabStrip tabStrip;
-        private readonly ToolStrip navToolStrip;
+        private readonly Panel navPanel;
+        private readonly TableLayoutPanel navLayout;
+        private readonly Panel addressWrap;
         private readonly TextBox addressBox;
-        private readonly ToolStripControlHost addressHost;
-        private readonly ToolStripButton goBtn;
-        private readonly ToolStripButton backBtn;
-        private readonly ToolStripButton fwdBtn;
-        private readonly ToolStripButton refreshBtn;
-        private readonly ToolStripButton bookmarkBtn;
-        private readonly ToolStripDropDownButton downloadsBtn;
-        private readonly ToolStripDropDownButton menuBtn;
+        private readonly ChromeButton goBtn;
+        private readonly ChromeButton backBtn;
+        private readonly ChromeButton fwdBtn;
+        private readonly ChromeButton refreshBtn;
+        private readonly ChromeButton bookmarkBtn;
+        private readonly ChromeButton downloadsBtn;
+        private readonly ChromeButton menuBtn;
+        private readonly ContextMenuStrip menuStrip;
+        private readonly ContextMenuStrip downloadsMenu;
+        private readonly ToolTip chromeTip;
         private readonly ToolStrip bookmarksBar;
+        private float _chromeDpiScale = 1f;
+        private int _chromeDpi = 96;
+        private Font? _navFont;
+        private Font? _navFontLg;
+        private Font? _addressFont;
+        private Font? _bookmarkFont;
+        private Font? _statusFont;
+        private Font? _findFont;
         private readonly Panel webViewPanel;
         private readonly Panel findBar;
         private readonly TextBox findInput;
@@ -442,7 +609,6 @@ namespace Ceprkac
         private string searchUrlTemplate = "https://www.google.com/search?q={0}";
         private CoreWebView2Environment? sharedEnvironment;
         private InjectedModuleCleaner? moduleCleaner;
-        private bool sizingAddressBox;
         private DateTime lastProcessRecover = DateTime.MinValue;
         private readonly List<string> pendingExternalUrls = new();
 
@@ -464,7 +630,15 @@ namespace Ceprkac
             MinimumSize = new Size(600, 400);
             BackColor = Theme.TitleBar;
 
-            try { Icon = new Icon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Ceprkac.ico")); }
+            try
+            {
+                var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Ceprkac.ico");
+                if (File.Exists(iconPath))
+                {
+                    using var src = new Icon(iconPath);
+                    Icon = (Icon)src.Clone();
+                }
+            }
             catch { }
 
             appDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Ceprkac");
@@ -481,32 +655,59 @@ namespace Ceprkac
             tabStrip.TabCloseClicked += (_, i) => CloseTab(i);
             tabStrip.NewTabClicked += (_, _) => AddNewTab(homePageUrl);
 
-            // Toolbar using ToolStrip — reliable dark theme rendering
+            // Nav bar — GBrowser-style HBox: buttons keep their size, address stretches.
+            // ToolStrip hosted the omnibox and clipped bookmark/downloads/menu at 4K 175%.
             var darkRenderer = new DarkToolStripRenderer();
-            navToolStrip = new ToolStrip
-            {
-                GripStyle = ToolStripGripStyle.Hidden,
-                BackColor = Theme.Toolbar,
-                ForeColor = Color.White,
-                Renderer = darkRenderer,
-                Padding = new Padding(4, 4, 4, 4),
-                AutoSize = false,
-                Height = 40,
-                Dock = DockStyle.Top,
-                CanOverflow = false,
-                Stretch = true,
-            };
+            chromeTip = new ToolTip();
 
-            backBtn = new ToolStripButton("◀") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
-            fwdBtn = new ToolStripButton("▶") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
-            refreshBtn = new ToolStripButton("⟳") { ForeColor = Color.White, Font = new Font("Segoe UI", 12f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
+            navPanel = new Panel
+            {
+                Dock = DockStyle.Top,
+                BackColor = Theme.Toolbar,
+                Padding = new Padding(8, 4, 8, 4),
+                Height = 44,
+            };
+            navLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 8,
+                RowCount = 1,
+                BackColor = Theme.Toolbar,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty,
+            };
+            navLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+            navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+
+            backBtn = new ChromeButton(ChromeIconKind.Back);
+            fwdBtn = new ChromeButton(ChromeIconKind.Forward);
+            refreshBtn = new ChromeButton(ChromeIconKind.Reload);
+            goBtn = new ChromeButton(ChromeIconKind.Go);
+            bookmarkBtn = new ChromeButton(ChromeIconKind.Star);
+            downloadsBtn = new ChromeButton(ChromeIconKind.Download);
+            menuBtn = new ChromeButton(ChromeIconKind.Menu);
+            chromeTip.SetToolTip(backBtn, "Back");
+            chromeTip.SetToolTip(fwdBtn, "Forward");
+            chromeTip.SetToolTip(refreshBtn, "Reload");
+            chromeTip.SetToolTip(goBtn, "Go");
+            chromeTip.SetToolTip(bookmarkBtn, "Bookmark (Ctrl+D)");
+            chromeTip.SetToolTip(downloadsBtn, "Downloads");
+            chromeTip.SetToolTip(menuBtn, "Menu");
+
             addressBox = new TextBox
             {
                 BackColor = Theme.AddressBox,
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10f),
+                Font = new Font("Segoe UI", 13f, FontStyle.Regular, GraphicsUnit.Pixel),
                 BorderStyle = BorderStyle.FixedSingle,
-                Width = 800,
+                Dock = DockStyle.Fill,
                 AutoCompleteMode = AutoCompleteMode.None,
                 AutoCompleteSource = AutoCompleteSource.CustomSource,
                 AutoCompleteCustomSource = addressSuggest,
@@ -531,59 +732,83 @@ namespace Ceprkac
                 var t = ActiveTab;
                 if (t != null) { t.FocusOmnibox = false; t.OmniboxUserTyped = false; }
             };
-            addressHost = new ToolStripControlHost(addressBox)
+            addressWrap = new Panel
             {
-                AutoSize = false,
-                Overflow = ToolStripItemOverflow.Never,
-                Margin = new Padding(4, 4, 4, 4),
-                Width = 800,
+                Dock = DockStyle.Fill,
+                BackColor = Theme.Toolbar,
+                Padding = new Padding(6, 4, 6, 4),
+                Margin = Padding.Empty,
             };
-            goBtn = new ToolStripButton("→") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
-            bookmarkBtn = new ToolStripButton("☆") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, Overflow = ToolStripItemOverflow.Never };
-            downloadsBtn = new ToolStripDropDownButton("↓") { ForeColor = Color.White, Font = new Font("Segoe UI", 11f), AutoSize = false, Width = 36, ShowDropDownArrow = false, ToolTipText = "Downloads", Overflow = ToolStripItemOverflow.Never };
-            downloadsBtn.DropDown.BackColor = Theme.ActiveTab;
-            downloadsBtn.DropDown.ForeColor = Color.White;
-            downloadsBtn.DropDownOpening += (_, _) => RebuildDownloadsMenu();
+            addressWrap.Controls.Add(addressBox);
 
-            menuBtn = new ToolStripDropDownButton("≡") { ForeColor = Color.White, Font = new Font("Segoe UI", 12f), AutoSize = false, Width = 36, ShowDropDownArrow = false, Overflow = ToolStripItemOverflow.Never };
-            menuBtn.DropDown.BackColor = Theme.ActiveTab;
-            menuBtn.DropDown.ForeColor = Color.White;
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("New Tab", null, (_, _) => AddNewTab(homePageUrl)) { ShortcutKeyDisplayString = "Ctrl+T", ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reopen Closed Tab", null, (_, _) => RestoreClosedTab()) { ShortcutKeyDisplayString = "Ctrl+Shift+T", ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripSeparator());
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Find in Page...", null, (_, _) => ToggleFindBar()) { ShortcutKeyDisplayString = "Ctrl+F", ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom In", null, (_, _) => ZoomBy(0.1)) { ShortcutKeyDisplayString = "Ctrl+Plus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Zoom Out", null, (_, _) => ZoomBy(-0.1)) { ShortcutKeyDisplayString = "Ctrl+Minus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Reset Zoom", null, (_, _) => ZoomReset()) { ShortcutKeyDisplayString = "Ctrl+0", ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripSeparator());
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Add Bookmark", null, (_, _) => AddCurrentPageBookmark()) { ShortcutKeys = Keys.Control | Keys.D, ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Import Bookmarks...", null, (_, _) => ImportBookmarksHtml()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Export Bookmarks...", null, (_, _) => ExportBookmarksHtml()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Clear Bookmarks", null, (_, _) => ClearBookmarks()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripSeparator());
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Clear History", null, (_, _) => ClearHistory()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripSeparator());
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Import Passwords (CSV)...", null, (_, _) => ImportPasswordsCsv()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Clear Saved Passwords", null, (_, _) => ClearPasswords()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripSeparator());
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("DevTools", null, (_, _) => ActiveTab?.WebView.CoreWebView2?.OpenDevToolsWindow()) { ShortcutKeys = Keys.Control | Keys.I, ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Change Search Engine...", null, (_, _) => { ShowSearchEnginePicker(); }) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Set as Default Browser...", null, (_, _) => SetAsDefaultBrowser()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
-            menuBtn.DropDownItems.Add(new ToolStripSeparator());
-            menuBtn.DropDownItems.Add(new ToolStripMenuItem("Exit", null, (_, _) => Close()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            downloadsMenu = new ContextMenuStrip
+            {
+                BackColor = Theme.ActiveTab,
+                ForeColor = Color.White,
+                Renderer = darkRenderer,
+                ShowImageMargin = false,
+            };
+            menuStrip = new ContextMenuStrip
+            {
+                BackColor = Theme.ActiveTab,
+                ForeColor = Color.White,
+                Renderer = darkRenderer,
+                ShowImageMargin = false,
+            };
+            menuStrip.Items.Add(new ToolStripMenuItem("New Tab", null, (_, _) => AddNewTab(homePageUrl)) { ShortcutKeyDisplayString = "Ctrl+T", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Reopen Closed Tab", null, (_, _) => RestoreClosedTab()) { ShortcutKeyDisplayString = "Ctrl+Shift+T", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripSeparator());
+            menuStrip.Items.Add(new ToolStripMenuItem("Find in Page...", null, (_, _) => ToggleFindBar()) { ShortcutKeyDisplayString = "Ctrl+F", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Zoom In", null, (_, _) => ZoomBy(0.1)) { ShortcutKeyDisplayString = "Ctrl+Plus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Zoom Out", null, (_, _) => ZoomBy(-0.1)) { ShortcutKeyDisplayString = "Ctrl+Minus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Reset Zoom", null, (_, _) => ZoomReset()) { ShortcutKeyDisplayString = "Ctrl+0", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripSeparator());
+            menuStrip.Items.Add(new ToolStripMenuItem("Add Bookmark", null, (_, _) => AddCurrentPageBookmark()) { ShortcutKeys = Keys.Control | Keys.D, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Import Bookmarks...", null, (_, _) => ImportBookmarksHtml()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Export Bookmarks...", null, (_, _) => ExportBookmarksHtml()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Clear Bookmarks", null, (_, _) => ClearBookmarks()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripSeparator());
+            menuStrip.Items.Add(new ToolStripMenuItem("Clear History", null, (_, _) => ClearHistory()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripSeparator());
+            menuStrip.Items.Add(new ToolStripMenuItem("Import Passwords (CSV)...", null, (_, _) => ImportPasswordsCsv()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Clear Saved Passwords", null, (_, _) => ClearPasswords()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripSeparator());
+            menuStrip.Items.Add(new ToolStripMenuItem("DevTools", null, (_, _) => ActiveTab?.WebView.CoreWebView2?.OpenDevToolsWindow()) { ShortcutKeys = Keys.Control | Keys.I, ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Change Search Engine...", null, (_, _) => { ShowSearchEnginePicker(); }) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Set as Default Browser...", null, (_, _) => SetAsDefaultBrowser()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripSeparator());
+            menuStrip.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => Close()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
 
             backBtn.Click += (_, _) => { var c = ActiveTab?.WebView.CoreWebView2; if (c?.CanGoBack == true) c.GoBack(); };
             fwdBtn.Click += (_, _) => { var c = ActiveTab?.WebView.CoreWebView2; if (c?.CanGoForward == true) c.GoForward(); };
             refreshBtn.Click += (_, _) => ActiveTab?.WebView.CoreWebView2?.Reload();
             goBtn.Click += (_, _) => NavigateCurrentTab(addressBox.Text);
             bookmarkBtn.Click += (_, _) => AddCurrentPageBookmark();
+            downloadsBtn.Click += (_, _) =>
+            {
+                RebuildDownloadsMenu();
+                downloadsMenu.Show(downloadsBtn, new Point(0, downloadsBtn.Height));
+            };
+            menuBtn.Click += (_, _) => menuStrip.Show(menuBtn, new Point(0, menuBtn.Height));
 
-            navToolStrip.Items.AddRange(new ToolStripItem[] { backBtn, fwdBtn, refreshBtn, new ToolStripSeparator(), addressHost, goBtn, new ToolStripSeparator(), bookmarkBtn, downloadsBtn, menuBtn });
-            addressHost.AutoSize = false;
-            SizeChanged += (_, _) => SizeAddressBox();
-            Shown += (_, _) => { ApplyChromeDpi(); SizeAddressBox(); };
+            void HostNav(Control c, int col)
+            {
+                c.Dock = DockStyle.Fill;
+                navLayout.Controls.Add(c, col, 0);
+            }
+            HostNav(backBtn, 0);
+            HostNav(fwdBtn, 1);
+            HostNav(refreshBtn, 2);
+            HostNav(addressWrap, 3);
+            HostNav(goBtn, 4);
+            HostNav(bookmarkBtn, 5);
+            HostNav(downloadsBtn, 6);
+            HostNav(menuBtn, 7);
+            navPanel.Controls.Add(navLayout);
+
+            Shown += (_, _) => ApplyChromeDpi();
             HandleCreated += (_, _) => ApplyChromeDpi();
-            DpiChanged += (_, _) => ApplyChromeDpi();
+            DpiChanged += MainForm_DpiChanged;
 
             // Bookmarks bar (ToolStrip for nested folder support)
             bookmarksBar = new ToolStrip
@@ -617,14 +842,14 @@ namespace Ceprkac
 
             // Status bar
             statusLabel = new ToolStripStatusLabel("Ready") { ForeColor = Theme.ForeDim };
-            statusStrip = new StatusStrip { BackColor = Theme.StatusBar, Renderer = darkRenderer, SizingGrip = false };
+            statusStrip = new StatusStrip { BackColor = Theme.StatusBar, Renderer = darkRenderer, SizingGrip = false, AutoSize = false, Height = 22 };
             statusStrip.Items.Add(statusLabel);
 
             // Layout (reverse dock order)
             Controls.Add(webViewPanel);
             Controls.Add(findBar);
             Controls.Add(bookmarksBar);
-            Controls.Add(navToolStrip);
+            Controls.Add(navPanel);
             Controls.Add(tabStrip);
             Controls.Add(statusStrip);
 
@@ -645,6 +870,26 @@ namespace Ceprkac
         {
             base.OnHandleCreated(e);
             try { int v = 1; DwmSetWindowAttribute(Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref v, sizeof(int)); } catch { }
+        }
+
+        // WinForms + WebView2 will otherwise scale chrome on every DPI message (compound or collapse to 96).
+        protected override void ScaleControl(SizeF factor, BoundsSpecified specified) { }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_DPICHANGED && IsHandleCreated)
+            {
+                int proposed = (int)(m.WParam.ToInt64() & 0xFFFF);
+                int monitorDpi = ReadMonitorDpi();
+                // WebView2 posts WM_DPICHANGED 96 while the window sits on a 175% monitor.
+                // Applying that shrinks tabs/toolbar to unusable 96-DPI sizes and eats the buttons.
+                if (proposed > 0 && monitorDpi >= 96 && Math.Abs(proposed - monitorDpi) > 12)
+                {
+                    ApplyChromeDpi();
+                    return;
+                }
+            }
+            base.WndProc(ref m);
         }
 
         private void MainForm_KeyDown(object? sender, KeyEventArgs e)
@@ -727,6 +972,8 @@ namespace Ceprkac
                 }
                 else
                     AddNewTab(homePageUrl);
+                // WebView2 can post a fake 96-DPI message during init — re-assert chrome after the first tab.
+                BeginInvoke(new Action(ApplyChromeDpi));
             }
             catch (Exception ex)
             {
@@ -920,58 +1167,149 @@ namespace Ceprkac
             moduleCleaner = InjectedModuleCleaner.Instance ?? InjectedModuleCleaner.StartGlobal();
         }
 
+        private void MainForm_DpiChanged(object? sender, DpiChangedEventArgs e)
+        {
+            int proposed = e.DeviceDpiNew;
+            int monitorDpi = ReadMonitorDpi();
+            if (proposed > 0 && monitorDpi >= 96 && Math.Abs(proposed - monitorDpi) > 12)
+            {
+                ApplyChromeDpi();
+                return;
+            }
+            Bounds = new Rectangle(
+                e.SuggestedRectangle.Left, e.SuggestedRectangle.Top,
+                e.SuggestedRectangle.Width, e.SuggestedRectangle.Height);
+            ApplyChromeDpi();
+        }
+
+        /// <summary>Monitor effective DPI. WebView2's window DPI is often 96 even on a 175% display.</summary>
+        private int ReadMonitorDpi()
+        {
+            try
+            {
+                if (IsHandleCreated)
+                {
+                    var mon = MonitorFromWindow(Handle, MONITOR_DEFAULTTONEAREST);
+                    if (mon != IntPtr.Zero && GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, out uint x, out _) == 0 && x >= 96)
+                        return (int)Math.Min(x, 384);
+                }
+            }
+            catch { }
+            try
+            {
+                if (IsHandleCreated)
+                {
+                    uint w = GetDpiForWindow(Handle);
+                    if (w >= 96 && w <= 384) return (int)w;
+                }
+            }
+            catch { }
+            try { if (DeviceDpi >= 96) return DeviceDpi; } catch { }
+            return 96;
+        }
+
+        private int Dip(int v) => Math.Max(1, (int)Math.Round(v * _chromeDpiScale));
+
+        private static Font UiPx(float px96, float scale)
+            => new Font("Segoe UI", Math.Max(8f, px96 * scale), FontStyle.Regular, GraphicsUnit.Pixel);
+
         private void ApplyChromeDpi()
         {
             if (IsDisposed || !IsHandleCreated) return;
-            float s = DeviceDpi / 96f;
-            if (s < 0.5f || float.IsNaN(s) || float.IsInfinity(s)) s = 1f;
-            int Dip(int v) => Math.Max(1, (int)Math.Round(v * s));
+            int dpi = ReadMonitorDpi();
+            if (dpi < 96) dpi = 96;
+            _chromeDpi = dpi;
+            _chromeDpiScale = dpi / 96f;
 
-            tabStrip.ApplyDpiScale(s);
+            MinimumSize = new Size(Dip(600), Dip(400));
+            tabStrip.ApplyDpiScale(_chromeDpiScale);
 
-            navToolStrip.ImageScalingSize = new Size(Dip(16), Dip(16));
-            navToolStrip.Padding = new Padding(Dip(4));
-            navToolStrip.Height = Dip(40);
-            foreach (ToolStripItem item in new ToolStripItem[] { backBtn, fwdBtn, refreshBtn, goBtn, bookmarkBtn, downloadsBtn, menuBtn })
+            int btn = Dip(36);
+            int navH = Dip(44);
+            navPanel.Padding = new Padding(Dip(8), Dip(4), Dip(8), Dip(4));
+            navPanel.MinimumSize = new Size(0, navH);
+            navPanel.Height = navH;
+
+            navLayout.ColumnStyles[0] = new ColumnStyle(SizeType.Absolute, btn);
+            navLayout.ColumnStyles[1] = new ColumnStyle(SizeType.Absolute, btn);
+            navLayout.ColumnStyles[2] = new ColumnStyle(SizeType.Absolute, btn);
+            navLayout.ColumnStyles[3] = new ColumnStyle(SizeType.Percent, 100f);
+            navLayout.ColumnStyles[4] = new ColumnStyle(SizeType.Absolute, btn);
+            navLayout.ColumnStyles[5] = new ColumnStyle(SizeType.Absolute, btn);
+            navLayout.ColumnStyles[6] = new ColumnStyle(SizeType.Absolute, btn);
+            navLayout.ColumnStyles[7] = new ColumnStyle(SizeType.Absolute, btn);
+
+            var oldNav = _navFont;
+            var oldNavLg = _navFontLg;
+            var oldAddr = _addressFont;
+            var oldBm = _bookmarkFont;
+            var oldSt = _statusFont;
+            var oldFind = _findFont;
+            _navFont = UiPx(16f, _chromeDpiScale);
+            _navFontLg = UiPx(18f, _chromeDpiScale);
+            _addressFont = UiPx(14f, _chromeDpiScale);
+            _bookmarkFont = UiPx(12f, _chromeDpiScale);
+            _statusFont = UiPx(11f, _chromeDpiScale);
+            _findFont = UiPx(12f, _chromeDpiScale);
+
+            foreach (var b in new[] { backBtn, fwdBtn, goBtn, bookmarkBtn, downloadsBtn })
             {
-                item.AutoSize = false;
-                item.Width = Dip(36);
-                item.Font = new Font("Segoe UI", item == refreshBtn || item == menuBtn ? 12f : 11f);
+                b.Font = _navFont;
+                b.MinimumSize = new Size(btn, Dip(28));
             }
-            addressBox.Font = new Font("Segoe UI", 10f);
-            addressHost.Margin = new Padding(Dip(4));
+            refreshBtn.Font = _navFontLg;
+            refreshBtn.MinimumSize = new Size(btn, Dip(28));
+            menuBtn.Font = _navFontLg;
+            menuBtn.MinimumSize = new Size(btn, Dip(28));
+            addressBox.Font = _addressFont;
+            addressWrap.Padding = new Padding(Dip(6), Dip(4), Dip(6), Dip(4));
 
             bookmarksBar.ImageScalingSize = new Size(Dip(16), Dip(16));
             bookmarksBar.Padding = new Padding(Dip(4), Dip(2), Dip(4), Dip(2));
-            bookmarksBar.Height = Dip(32);
-            bookmarksBar.Font = new Font("Segoe UI", 8f);
+            bookmarksBar.Font = _bookmarkFont;
+            bookmarksBar.Height = Dip(30);
+            bookmarksBar.MinimumSize = new Size(0, Dip(28));
+            foreach (ToolStripItem item in bookmarksBar.Items)
+                item.Font = _bookmarkFont;
+            menuStrip.Font = _bookmarkFont;
+            downloadsMenu.Font = _bookmarkFont;
+
+            statusStrip.AutoSize = false;
+            statusStrip.Height = Dip(22);
+            statusLabel.Font = _statusFont;
 
             findBar.Height = Dip(32);
-            SizeAddressBox();
+            foreach (Control c in findBar.Controls)
+            {
+                c.Top = Dip(3);
+                c.Height = Dip(24);
+                c.Font = _findFont;
+            }
+            if (findBar.Controls.Count >= 4)
+            {
+                findBar.Controls[0].Left = Dip(8);
+                findBar.Controls[0].Width = Dip(280);
+                findBar.Controls[1].Left = Dip(296);
+                findBar.Controls[1].Width = Dip(60);
+                findBar.Controls[2].Left = Dip(362);
+                findBar.Controls[2].Width = Dip(60);
+                findBar.Controls[3].Left = Dip(428);
+                findBar.Controls[3].Width = Dip(32);
+            }
+            navLayout.PerformLayout();
             Invalidate(true);
+            DisposeFont(oldNav);
+            DisposeFont(oldNavLg);
+            DisposeFont(oldAddr);
+            DisposeFont(oldBm);
+            DisposeFont(oldSt);
+            DisposeFont(oldFind);
         }
 
-        private void SizeAddressBox()
+        private static void DisposeFont(Font? f)
         {
-            if (sizingAddressBox || navToolStrip.IsDisposed) return;
-            sizingAddressBox = true;
-            try
-            {
-                int used = navToolStrip.Padding.Horizontal;
-                foreach (ToolStripItem item in navToolStrip.Items)
-                {
-                    if (item == addressHost || !item.Available) continue;
-                    used += item.Width + item.Margin.Horizontal;
-                }
-                int w = Math.Max(200, navToolStrip.DisplayRectangle.Width - used);
-                if (Math.Abs(addressHost.Width - w) <= 1) return;
-                addressHost.AutoSize = false;
-                addressHost.Width = w;
-            }
-            finally
-            {
-                sizingAddressBox = false;
-            }
+            if (f == null) return;
+            try { f.Dispose(); } catch { }
         }
 
         private void SetAddressText(string? url)
@@ -1122,7 +1460,6 @@ namespace Ceprkac
             if (addressBox.IsDisposed) return;
             var tab = ActiveTab;
             if (tab != null && tab.OmniboxUserTyped) selectAll = false;
-            try { navToolStrip.Focus(); } catch { }
             addressBox.Focus();
             if (selectAll) addressBox.SelectAll();
             else
@@ -1991,17 +2328,17 @@ namespace Ceprkac
         private void RefreshDownloadsButton()
         {
             int active = downloads.Count(d => d.Status == "Downloading");
-            downloadsBtn.Text = active > 0 ? $"↓ {active}" : "↓";
-            downloadsBtn.ToolTipText = active > 0 ? $"Downloads — {active} in progress" : "Downloads";
+            downloadsBtn.Text = active > 0 ? $"\u2913 {active}" : "\u2913";
+            chromeTip.SetToolTip(downloadsBtn, active > 0 ? $"Downloads — {active} in progress" : "Downloads");
         }
 
         private void RebuildDownloadsMenu()
         {
-            downloadsBtn.DropDownItems.Clear();
+            downloadsMenu.Items.Clear();
             var recent = downloads.AsEnumerable().Reverse().Take(15).ToList();
             if (recent.Count == 0)
             {
-                downloadsBtn.DropDownItems.Add(new ToolStripMenuItem("No downloads yet.") { Enabled = false, ForeColor = Theme.ForeDim });
+                downloadsMenu.Items.Add(new ToolStripMenuItem("No downloads yet.") { Enabled = false, ForeColor = Theme.ForeDim });
                 return;
             }
             foreach (var dl in recent)
@@ -2015,9 +2352,9 @@ namespace Ceprkac
                     ForeColor = Color.White, BackColor = Theme.ActiveTab,
                 };
                 mi.Click += (_, _) => { try { if (File.Exists(itemDl.Path)) Process.Start(new ProcessStartInfo(itemDl.Path) { UseShellExecute = true }); } catch { } };
-                downloadsBtn.DropDownItems.Add(mi);
+                downloadsMenu.Items.Add(mi);
             }
-            downloadsBtn.DropDownItems.Add(new ToolStripSeparator());
+            downloadsMenu.Items.Add(new ToolStripSeparator());
             var clear = new ToolStripMenuItem("Clear") { ForeColor = Color.White, BackColor = Theme.ActiveTab };
             clear.Click += (_, _) =>
             {
@@ -2025,7 +2362,7 @@ namespace Ceprkac
                 SaveDownloads();
                 RefreshDownloadsButton();
             };
-            downloadsBtn.DropDownItems.Add(clear);
+            downloadsMenu.Items.Add(clear);
         }
 
         private void LoadDownloads()
