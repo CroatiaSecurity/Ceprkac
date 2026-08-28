@@ -208,7 +208,6 @@ namespace Ceprkac
         public double ZoomFactor { get; set; } = 1.0;
         public bool IsPopup { get; set; }
         public bool FocusOmnibox { get; set; }
-        public bool OmniboxUserTyped { get; set; }
         public DateTime LastAutoFillAttempt { get; set; } = DateTime.MinValue;
     }
 
@@ -715,10 +714,9 @@ namespace Ceprkac
             addressBox.KeyPress += (_, e) =>
             {
                 if (char.IsControl(e.KeyChar)) return;
-                var t = ActiveTab;
-                if (t != null && t.FocusOmnibox) t.OmniboxUserTyped = true;
-                // Enable suggest after the first character is already in the box.
-                // Turning it on during the first KeyPress can swallow that character.
+                // Enable suggest only after the first character is already in the box.
+                // Turning it on during the first KeyPress recreates the edit handle and
+                // swallows that character.
                 if (addressBox.Text.Length >= 1 && addressBox.AutoCompleteMode != AutoCompleteMode.Suggest)
                     addressBox.AutoCompleteMode = AutoCompleteMode.Suggest;
             };
@@ -730,7 +728,7 @@ namespace Ceprkac
                 addressBox.AutoCompleteMode = AutoCompleteMode.None;
                 NavigateCurrentTab(addressBox.Text);
                 var t = ActiveTab;
-                if (t != null) { t.FocusOmnibox = false; t.OmniboxUserTyped = false; }
+                if (t != null) t.FocusOmnibox = false;
             };
             addressWrap = new Panel
             {
@@ -855,7 +853,6 @@ namespace Ceprkac
 
             KeyPreview = true;
             KeyDown += MainForm_KeyDown;
-            KeyPress += MainForm_KeyPress;
             Application.AddMessageFilter(this);
             Load += (_, _) => InitializeAsync();
             FormClosing += (_, _) =>
@@ -906,7 +903,6 @@ namespace Ceprkac
             else if (e.KeyCode == Keys.Escape && ActiveTab?.FocusOmnibox == true)
             {
                 ActiveTab.FocusOmnibox = false;
-                ActiveTab.OmniboxUserTyped = false;
                 try { ActiveTab.WebView.Focus(); } catch { }
                 e.Handled = true;
             }
@@ -1315,151 +1311,28 @@ namespace Ceprkac
         private void SetAddressText(string? url)
         {
             url = url ?? "";
-            var tab = ActiveTab;
-            if (tab != null && tab.FocusOmnibox && tab.OmniboxUserTyped) return;
+            // Never clobber what the user is actively typing/selecting in the box.
+            if (addressBox.Focused) return;
             if (addressBox.Text == url) return;
             addressBox.AutoCompleteMode = AutoCompleteMode.None;
             addressBox.Text = url;
-        }
-
-        private void MainForm_KeyPress(object? sender, KeyPressEventArgs e)
-        {
-            var tab = ActiveTab;
-            if (tab == null || !tab.FocusOmnibox || addressBox.Focused) return;
-            if (char.IsControl(e.KeyChar)) return;
-            ApplyOmniboxChar(e.KeyChar);
-            e.Handled = true;
-        }
-
-        public bool PreFilterMessage(ref Message m)
-        {
-            var tab = ActiveTab;
-            if (tab == null || !tab.FocusOmnibox) return false;
-            if (addressBox.Focused) return false;
-            if (findBar.Visible && findInput.Focused) return false;
-            if (m.HWnd == IntPtr.Zero) return false;
-            if (IsAddressBoxHwnd(m.HWnd)) return false;
-            if (!IsOurHwnd(m.HWnd)) return false;
-
-            if (m.Msg == WM_CHAR || m.Msg == WM_DEADCHAR || m.Msg == WM_UNICHAR)
-            {
-                char c = (char)(m.WParam.ToInt32() & 0xFFFF);
-                if (char.IsControl(c) && c != '\b') return false;
-                ApplyOmniboxChar(c);
-                return true;
-            }
-
-            if (m.Msg != WM_KEYDOWN) return false;
-            var key = (Keys)(m.WParam.ToInt32() & 0xFFFF);
-            var mods = ModifierKeys;
-            if ((mods & Keys.Control) != 0 || (mods & Keys.Alt) != 0) return false;
-            if (key == Keys.Escape || key == Keys.Tab) return false;
-            if (key == Keys.Enter)
-            {
-                addressBox.AutoCompleteMode = AutoCompleteMode.None;
-                NavigateCurrentTab(addressBox.Text);
-                tab.FocusOmnibox = false;
-                tab.OmniboxUserTyped = false;
-                return true;
-            }
-            if (key == Keys.Back)
-            {
-                ApplyOmniboxChar('\b');
-                return true;
-            }
-            // Keep KEYDOWN flowing so TranslateMessage still emits WM_CHAR
-            // (which we redirect above). Pull focus back so later keys land
-            // in the omnibox without SelectAll wiping what was typed.
-            FocusAddressBar(selectAll: !tab.OmniboxUserTyped);
-            return false;
-        }
-
-        private bool IsAddressBoxHwnd(IntPtr hwnd)
-        {
-            try
-            {
-                if (hwnd == addressBox.Handle) return true;
-                return IsChild(addressBox.Handle, hwnd);
-            }
-            catch { return false; }
-        }
-
-        private bool IsOurHwnd(IntPtr hwnd)
-        {
-            try
-            {
-                if (hwnd == Handle || IsChild(Handle, hwnd)) return true;
-                if (GetAncestor(hwnd, GA_ROOT) == Handle) return true;
-                foreach (var t in tabStrip.Tabs)
-                {
-                    try
-                    {
-                        var wh = t.WebView.Handle;
-                        if (hwnd == wh || IsChild(wh, hwnd)) return true;
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-            return false;
-        }
-
-        private void ApplyOmniboxChar(char c)
-        {
-            var tab = ActiveTab;
-            if (tab == null) return;
-            string text = addressBox.Text ?? "";
-            int start = addressBox.SelectionStart;
-            int len = addressBox.SelectionLength;
-            if (start < 0 || start > text.Length) start = text.Length;
-            if (len < 0 || start + len > text.Length) len = text.Length - start;
-
-            if (c == '\b')
-            {
-                if (len > 0)
-                {
-                    text = text.Remove(start, len);
-                    addressBox.Text = text;
-                    addressBox.SelectionStart = start;
-                }
-                else if (start > 0)
-                {
-                    text = text.Remove(start - 1, 1);
-                    addressBox.Text = text;
-                    addressBox.SelectionStart = start - 1;
-                }
-            }
-            else
-            {
-                bool replaceAll = !tab.OmniboxUserTyped || len == text.Length;
-                if (replaceAll)
-                {
-                    text = c.ToString();
-                    start = 1;
-                }
-                else if (len > 0)
-                {
-                    text = text.Remove(start, len).Insert(start, c.ToString());
-                    start += 1;
-                }
-                else
-                {
-                    text = text.Insert(start, c.ToString());
-                    start += 1;
-                }
-                addressBox.Text = text;
-                addressBox.SelectionStart = start;
-            }
+            addressBox.SelectionStart = addressBox.Text.Length;
             addressBox.SelectionLength = 0;
-            tab.OmniboxUserTyped = true;
-            FocusAddressBar(selectAll: false);
         }
 
+        // The address bar is a normal WinForms TextBox and handles its own input.
+        // The old custom keystroke-redirection (WM_CHAR/WM_KEYDOWN → ApplyOmniboxChar)
+        // fought WinForms focus + AutoComplete handle recreation and dropped the first
+        // character. Input now flows straight to the focused TextBox. This filter is
+        // retained only to satisfy IMessageFilter and does not intercept anything.
+        public bool PreFilterMessage(ref Message m) => false;
+
+        // Focus the address bar and select its contents so the first keystroke
+        // replaces the pre-filled URL (standard browser omnibox behavior). Typing
+        // is handled natively by the TextBox — no manual character routing.
         private void FocusAddressBar(bool selectAll = true)
         {
             if (addressBox.IsDisposed) return;
-            var tab = ActiveTab;
-            if (tab != null && tab.OmniboxUserTyped) selectAll = false;
             addressBox.Focus();
             if (selectAll) addressBox.SelectAll();
             else
@@ -1467,16 +1340,6 @@ namespace Ceprkac
                 addressBox.SelectionLength = 0;
                 addressBox.SelectionStart = addressBox.Text.Length;
             }
-        }
-
-        private bool OmniboxHasUserQuery(BrowserTab tab)
-        {
-            if (tab.OmniboxUserTyped) return true;
-            var text = (addressBox.Text ?? "").Trim();
-            if (text.Length == 0) return false;
-            if (string.Equals(text, tab.Url, StringComparison.OrdinalIgnoreCase)) return false;
-            if (string.Equals(text, homePageUrl, StringComparison.OrdinalIgnoreCase)) return false;
-            return true;
         }
 
         public void RestoreAndFocus()
@@ -1538,7 +1401,7 @@ namespace Ceprkac
                 TabStop = false,
                 DefaultBackgroundColor = Theme.ActiveTab,
             };
-            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = focusOmnibox, OmniboxUserTyped = false };
+            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = focusOmnibox };
 
             int insertIndex = insertAfter.HasValue ? insertAfter.Value + 1
                 : tabStrip.SelectedIndex >= 0 ? tabStrip.SelectedIndex + 1
@@ -1549,19 +1412,11 @@ namespace Ceprkac
             _ = webView.Handle;
             webView.GotFocus += (_, _) =>
             {
+                // Only for a freshly opened blank tab: pull focus to the omnibox once,
+                // then release so the user can click into the page normally afterwards.
                 if (!tab.FocusOmnibox) return;
-                try
-                {
-                    // Steal focus back immediately so the next keystroke does not
-                    // land in the page. BeginInvoke is a second pass after layout.
-                    FocusAddressBar(selectAll: !tab.OmniboxUserTyped);
-                    BeginInvoke(new Action(() =>
-                    {
-                        if (IsDisposed || !tab.FocusOmnibox || ActiveTab != tab) return;
-                        FocusAddressBar(selectAll: !tab.OmniboxUserTyped);
-                    }));
-                }
-                catch { }
+                tab.FocusOmnibox = false;
+                try { FocusAddressBar(selectAll: true); } catch { }
             };
 
             SwitchToTab(insertIndex);
@@ -1593,7 +1448,9 @@ namespace Ceprkac
                     core.SourceChanged += (_, _) =>
                     {
                         tab.Url = core.Source ?? "";
-                        if (ActiveTab == tab && !(addressBox.Focused || (tab.FocusOmnibox && tab.OmniboxUserTyped)))
+                        // Clicking a link (or any in-page navigation) must reflect the new URL.
+                        // Only skip when the user is actively editing the address box.
+                        if (ActiveTab == tab && !addressBox.Focused)
                             SetAddressText(tab.Url);
                     };
                     core.NewWindowRequested += (_, args) =>
@@ -1691,7 +1548,7 @@ namespace Ceprkac
                     SetupAdBlocker(core);
                 }
                 if (!string.IsNullOrWhiteSpace(tab.Url)) NavigateTab(tab, tab.Url);
-                if (tab.FocusOmnibox) FocusAddressBar(selectAll: !OmniboxHasUserQuery(tab));
+                if (tab.FocusOmnibox) FocusAddressBar(selectAll: true);
             }
             catch (Exception ex)
             {
@@ -1707,7 +1564,6 @@ namespace Ceprkac
             {
                 var prev = tabStrip.Tabs[tabStrip.SelectedIndex];
                 prev.FocusOmnibox = false;
-                prev.OmniboxUserTyped = false;
                 prev.WebView.Visible = false;
             }
             tabStrip.SelectedIndex = index;
@@ -1715,12 +1571,12 @@ namespace Ceprkac
             tab.WebView.Visible = true;
             tab.WebView.BringToFront();
             try { tab.WebView.ZoomFactor = tab.ZoomFactor; } catch { }
-            if (!(tab.FocusOmnibox && addressBox.Focused && OmniboxHasUserQuery(tab)))
+            if (!addressBox.Focused)
                 SetAddressText(tab.Url);
             Text = tab.Title + " - Ceprkac";
             UpdateTabState(tab);
             tabStrip.Invalidate();
-            if (tab.FocusOmnibox) FocusAddressBar(selectAll: !OmniboxHasUserQuery(tab));
+            if (tab.FocusOmnibox) FocusAddressBar(selectAll: true);
             else tab.WebView.Focus();
         }
 
@@ -1914,7 +1770,7 @@ namespace Ceprkac
             tab.Url = uri.ToString();
             if (tab.WebView.CoreWebView2 != null)
                 tab.WebView.CoreWebView2.Navigate(uri.ToString());
-            if (ActiveTab == tab && !(addressBox.Focused || (tab.FocusOmnibox && tab.OmniboxUserTyped)))
+            if (ActiveTab == tab && !addressBox.Focused)
                 SetAddressText(uri.ToString());
             AddToHistory(uri.ToString());
         }
@@ -2007,17 +1863,134 @@ namespace Ceprkac
             if (core == null) return;
             string sourceUri = "";
             string linkUri = "";
+            string selectionText = "";
+            CoreWebView2ContextMenuTargetKind kind = CoreWebView2ContextMenuTargetKind.Page;
             try
             {
                 var target = e.ContextMenuTarget;
+                kind = target.Kind;
                 if (target.HasSourceUri) sourceUri = target.SourceUri ?? "";
                 if (target.HasLinkUri) linkUri = target.LinkUri ?? "";
+                try { selectionText = target.SelectionText ?? ""; } catch { }
             }
             catch { }
             ReplaceNativeSaveAs(e.MenuItems, "saveImageAs", core, sourceUri);
             ReplaceNativeSaveAs(e.MenuItems, "saveVideoAs", core, sourceUri);
             ReplaceNativeSaveAs(e.MenuItems, "saveAudioAs", core, sourceUri);
             ReplaceNativeSaveAs(e.MenuItems, "saveLinkAs", core, linkUri);
+            AddSearchMenuItems(e.MenuItems, kind, selectionText, sourceUri, linkUri);
+        }
+
+        // Adds "Search {engine} for ..." entries to the WebView2 context menu based on
+        // what was right-clicked: selected text (text search), an image (reverse/image
+        // search by URL), or a video/audio element (video search by URL).
+        private void AddSearchMenuItems(
+            IList<CoreWebView2ContextMenuItem> items,
+            CoreWebView2ContextMenuTargetKind kind,
+            string selectionText,
+            string sourceUri,
+            string linkUri)
+        {
+            if (sharedEnvironment == null) return;
+            var engine = CurrentSearchEngineName();
+            var toAdd = new List<CoreWebView2ContextMenuItem>();
+
+            void AddItem(string label, string url)
+            {
+                if (string.IsNullOrWhiteSpace(url)) return;
+                try
+                {
+                    var item = sharedEnvironment.CreateContextMenuItem(
+                        label, null, CoreWebView2ContextMenuItemKind.Command);
+                    var captured = url;
+                    item.CustomItemSelected += (_, _) =>
+                    {
+                        try { BeginInvoke(new Action(() => AddNewTab(captured, focusOmnibox: false))); }
+                        catch { }
+                    };
+                    toAdd.Add(item);
+                }
+                catch { }
+            }
+
+            // Selected text → text search (works for any target kind that carries a selection).
+            var sel = (selectionText ?? "").Trim();
+            if (sel.Length > 0)
+            {
+                var shown = sel.Length > 40 ? sel.Substring(0, 40) + "…" : sel;
+                AddItem($"Search {engine} for \"{shown}\"", BuildTextSearchUrl(sel));
+            }
+
+            // Image target → image search by the image URL.
+            if (kind == CoreWebView2ContextMenuTargetKind.Image && !string.IsNullOrWhiteSpace(sourceUri))
+                AddItem($"Search {engine} for this image", BuildImageSearchUrl(sourceUri));
+
+            // Video/Audio target → video search by the media URL.
+            if ((kind == CoreWebView2ContextMenuTargetKind.Video || kind == CoreWebView2ContextMenuTargetKind.Audio)
+                && !string.IsNullOrWhiteSpace(sourceUri))
+                AddItem($"Search {engine} for this video", BuildVideoSearchUrl(sourceUri));
+
+            if (toAdd.Count == 0) return;
+
+            try
+            {
+                // Insert a separator + our items at the top of the menu for visibility.
+                int idx = 0;
+                var sep = sharedEnvironment.CreateContextMenuItem(
+                    "", null, CoreWebView2ContextMenuItemKind.Separator);
+                items.Insert(idx++, sep);
+                foreach (var it in toAdd)
+                    items.Insert(idx++, it);
+            }
+            catch { }
+        }
+
+        // Resolve a friendly name for the active search engine from its search template.
+        private string CurrentSearchEngineName()
+        {
+            foreach (var (name, _, search) in SearchEngines)
+            {
+                if (string.Equals(search, searchUrlTemplate, StringComparison.OrdinalIgnoreCase))
+                    return name;
+            }
+            try { return new Uri(string.Format(searchUrlTemplate, "x")).Host.Replace("www.", ""); }
+            catch { return "web"; }
+        }
+
+        private string BuildTextSearchUrl(string query) =>
+            string.Format(searchUrlTemplate, Uri.EscapeDataString(query));
+
+        // Image search: Google/Bing support dedicated image verticals; others fall back
+        // to a normal query of the image URL.
+        private string BuildImageSearchUrl(string imageUrl)
+        {
+            var host = SearchHost();
+            var enc = Uri.EscapeDataString(imageUrl);
+            if (host.Contains("google."))
+                return "https://lens.google.com/uploadbyurl?url=" + enc;
+            if (host.Contains("bing."))
+                return "https://www.bing.com/images/search?q=imgurl:" + enc + "&view=detailv2&iss=sbi";
+            if (host.Contains("yandex."))
+                return "https://yandex.com/images/search?rpt=imageview&url=" + enc;
+            return BuildTextSearchUrl(imageUrl);
+        }
+
+        // Video search: Google/Bing support a video vertical; others fall back to a query.
+        private string BuildVideoSearchUrl(string videoUrl)
+        {
+            var host = SearchHost();
+            var enc = Uri.EscapeDataString(videoUrl);
+            if (host.Contains("google."))
+                return "https://www.google.com/search?q=" + enc + "&tbm=vid";
+            if (host.Contains("bing."))
+                return "https://www.bing.com/videos/search?q=" + enc;
+            return BuildTextSearchUrl(videoUrl);
+        }
+
+        private string SearchHost()
+        {
+            try { return new Uri(string.Format(searchUrlTemplate, "x")).Host.ToLowerInvariant(); }
+            catch { return ""; }
         }
 
         private void ReplaceNativeSaveAs(IList<CoreWebView2ContextMenuItem> items, string name, CoreWebView2 core, string uri)

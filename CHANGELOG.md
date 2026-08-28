@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.6 — 2026-08-28
+
+Installer: `Ceprkac-0.7.6-Setup.exe`
+
+### Address bar fixes
+
+- **Address bar now updates when you click a link.** In-page navigations (clicking a link, related video, back/forward) reliably reflect the new URL. The bar previously stayed blank because a stale omnibox-focus flag suppressed the update.
+- **Typing in the address bar no longer eats the first character.** The custom keystroke-redirection layer (which fought WinForms focus and autocomplete handle recreation) has been removed; the address bar is now a normal text field. Searching "cake" searches "cake" — not "ake" with the homepage prepended.
+- A freshly opened tab focuses and selects the address bar once, so the first keystroke cleanly replaces the pre-filled URL, then releases focus so you can click into the page normally.
+
+### Context-menu search
+
+- Right-click now offers **Search {engine} for ...** using your selected default search engine:
+  - **Selected text** → text search for the selection.
+  - **Right-click an image** → image search (Google Lens / Bing / Yandex by image URL; other engines fall back to a query).
+  - **Right-click a video or audio element** → video search (Google / Bing verticals; others fall back to a query).
+- Results open in a new tab.
+
+---
+
 ## 0.7.5 — 2026-08-28
 
 Installer: `Ceprkac-0.7.5-Setup.exe`
