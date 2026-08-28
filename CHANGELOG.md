@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.7 — 2026-08-28
+
+Installer: `Ceprkac-0.7.7-Setup.exe`
+
+### Context-menu search fix
+
+- **Right-click "Search {engine} for this image/video" now actually appears.** In 0.7.6 the search items shared a single error handler with the leading separator; when the separator failed to construct, every search item was silently dropped. Items are now inserted individually and the separator is best-effort, so a separator failure never hides the search entries.
+- Added URL-based fallback detection: if a right-clicked element's reported target kind is generic (as some in-page image/video viewers report), Ceprkac now infers image vs. video from the media/link URL extension, so image and video search still show up.
+
+---
+
 ## 0.7.6 — 2026-08-28
 
 Installer: `Ceprkac-0.7.6-Setup.exe`

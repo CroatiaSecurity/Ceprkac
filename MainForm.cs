@@ -1921,28 +1921,58 @@ namespace Ceprkac
                 AddItem($"Search {engine} for \"{shown}\"", BuildTextSearchUrl(sel));
             }
 
-            // Image target → image search by the image URL.
-            if (kind == CoreWebView2ContextMenuTargetKind.Image && !string.IsNullOrWhiteSpace(sourceUri))
-                AddItem($"Search {engine} for this image", BuildImageSearchUrl(sourceUri));
+            // Prefer the media/source URI; fall back to a link that points at a media file.
+            // Some in-page image/video viewers report Kind = Page/Other, so do not rely on
+            // Kind alone — infer from the URI as well.
+            var mediaUri = !string.IsNullOrWhiteSpace(sourceUri) ? sourceUri : linkUri;
 
-            // Video/Audio target → video search by the media URL.
-            if ((kind == CoreWebView2ContextMenuTargetKind.Video || kind == CoreWebView2ContextMenuTargetKind.Audio)
-                && !string.IsNullOrWhiteSpace(sourceUri))
-                AddItem($"Search {engine} for this video", BuildVideoSearchUrl(sourceUri));
+            bool isImage = kind == CoreWebView2ContextMenuTargetKind.Image
+                           || LooksLikeImageUrl(sourceUri) || LooksLikeImageUrl(linkUri);
+            bool isVideo = kind == CoreWebView2ContextMenuTargetKind.Video
+                           || kind == CoreWebView2ContextMenuTargetKind.Audio
+                           || LooksLikeVideoUrl(sourceUri) || LooksLikeVideoUrl(linkUri);
+
+            if (isImage && !string.IsNullOrWhiteSpace(mediaUri))
+                AddItem($"Search {engine} for this image", BuildImageSearchUrl(mediaUri));
+            else if (isVideo && !string.IsNullOrWhiteSpace(mediaUri))
+                AddItem($"Search {engine} for this video", BuildVideoSearchUrl(mediaUri));
 
             if (toAdd.Count == 0) return;
 
+            // Insert our items at the top of the menu, each guarded independently so one
+            // failure never suppresses the rest. Separator is best-effort and last.
+            int idx = 0;
+            foreach (var it in toAdd)
+            {
+                try { items.Insert(idx, it); idx++; }
+                catch { }
+            }
             try
             {
-                // Insert a separator + our items at the top of the menu for visibility.
-                int idx = 0;
                 var sep = sharedEnvironment.CreateContextMenuItem(
-                    "", null, CoreWebView2ContextMenuItemKind.Separator);
-                items.Insert(idx++, sep);
-                foreach (var it in toAdd)
-                    items.Insert(idx++, it);
+                    null, null, CoreWebView2ContextMenuItemKind.Separator);
+                items.Insert(idx, sep);
             }
             catch { }
+        }
+
+        private static readonly string[] ImageExtensions =
+            { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif", ".ico", ".tiff" };
+        private static readonly string[] VideoExtensions =
+            { ".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v", ".ogv", ".mpeg", ".mpg", ".m3u8" };
+
+        private static bool LooksLikeImageUrl(string? url) => UrlHasExtension(url, ImageExtensions);
+        private static bool LooksLikeVideoUrl(string? url) => UrlHasExtension(url, VideoExtensions);
+
+        private static bool UrlHasExtension(string? url, string[] exts)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            string path;
+            try { path = new Uri(url!).AbsolutePath.ToLowerInvariant(); }
+            catch { path = url!.ToLowerInvariant(); }
+            foreach (var e in exts)
+                if (path.EndsWith(e, StringComparison.Ordinal)) return true;
+            return false;
         }
 
         // Resolve a friendly name for the active search engine from its search template.
