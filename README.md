@@ -2,11 +2,11 @@
 
 A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and **WebView2**. Same UI and features as [GBrowser](https://github.com/CroatiaSecurity/GBrowser), with Edge codecs so **H.264 / AAC** actually play (Discord embeds, typical HTML5 players).
 
-[![version](https://img.shields.io/badge/version-0.7.4-blue?style=flat-square)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.7.5-blue?style=flat-square)](CHANGELOG.md)
 [![.NET](https://img.shields.io/badge/.NET-Framework%204.8-512BD4?style=flat-square)](#requirements)
 [![engine](https://img.shields.io/badge/engine-WebView2%20(Chromium)-orange?style=flat-square)](#requirements)
 
-**Download:** [Ceprkac 0.7.4 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
+**Download:** [Ceprkac 0.7.5 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
 
 ---
 
@@ -39,7 +39,7 @@ dotnet run --project Ceprkac.csproj
 build.bat
 ```
 
-Output: `releases\0.7.4\Ceprkac-0.7.4-Setup.exe`
+Output: `releases\0.7.5\Ceprkac-0.7.5-Setup.exe`
 
 ## Default browser
 

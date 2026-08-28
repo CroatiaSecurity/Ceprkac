@@ -3325,58 +3325,40 @@ namespace Ceprkac
 
             // YouTube ads live in ytInitialData / player JSON and must be stripped in the
             // MAIN world before page scripts run. Isolated-world <script> tags are blocked
-            // by YouTube CSP, which is why ads came back after 0.6.8. CDP is registered
-            // only when this tab actually navigates to YouTube, so Cloudflare forums in
-            // other tabs are not tagged as a bot.
-            bool youtubeCdpReady = false;
-            bool youtubeCdpInstalling = false;
-            core.NavigationStarting += (_, navArgs) =>
-            {
-                if (navArgs.Cancel || !IsYouTubeUrl(navArgs.Uri)) return;
-                if (youtubeCdpReady || youtubeCdpInstalling) return;
-                navArgs.Cancel = true;
-                youtubeCdpInstalling = true;
-                var dest = navArgs.Uri;
-                _ = InstallYouTubeMainWorldThenNavigate(core, dest, () =>
-                {
-                    youtubeCdpReady = true;
-                    youtubeCdpInstalling = false;
-                }, () => youtubeCdpInstalling = false);
-            };
+            // by YouTube CSP, which is why ads came back after 0.6.8.
+            //
+            // The main-world script is installed ONCE, unconditionally, at tab setup via
+            // Page.addScriptToEvaluateOnNewDocument. It is self-guarded: YouTubeMainWorldCode
+            // bails immediately on any non-YouTube host and on auth/OAuth pages, so registering
+            // it globally never tags Cloudflare forums as a bot. Installing it here (instead of
+            // lazily on a cancellable top-level NavigationStarting) means it runs before page
+            // scripts on EVERY document — including SPA soft-navigations (clicking a related
+            // video), back/forward, and renderer recovery — so ad-blocking no longer depends on
+            // the direction the user arrived at the video from.
+            _ = InstallYouTubeMainWorld(core);
 
             // Inject fetch/XHR blocker into main world via DevTools Protocol
             core.NavigationCompleted += (_, _) => InjectMainWorldBlocker(core);
         }
 
-        private static bool IsYouTubeUrl(string? url)
-        {
-            try
-            {
-                var h = new Uri(url ?? "").Host.ToLowerInvariant();
-                return h == "youtube.com" || h == "www.youtube.com" || h == "m.youtube.com"
-                    || h == "music.youtube.com" || h == "youtu.be"
-                    || h.EndsWith(".youtube.com") || h.EndsWith(".youtube-nocookie.com");
-            }
-            catch { return false; }
-        }
-
-        private static async Task InstallYouTubeMainWorldThenNavigate(
-            CoreWebView2 core, string dest, Action onReady, Action onFailed)
+        // Install the main-world YouTube ad blocker once per CoreWebView2, independent of
+        // navigation. Page.addScriptToEvaluateOnNewDocument runs the script in the main world
+        // before any page script on every subsequent document — top-level loads, SPA
+        // soft-navigations, and back/forward alike. The script self-guards on hostname, so it
+        // is inert everywhere except YouTube. Falls back to AddScriptToExecuteOnDocumentCreated
+        // (isolated-world wrapper) if CDP is unavailable.
+        private static async Task InstallYouTubeMainWorld(CoreWebView2 core)
         {
             try
             {
                 string escapedJs = YouTubeMainWorldCode.Replace("\\", "\\\\").Replace("\"", "\\\"");
                 string cdpParams = "{\"source\":\"" + escapedJs + "\"}";
                 await core.CallDevToolsProtocolMethodAsync("Page.addScriptToEvaluateOnNewDocument", cdpParams);
-                onReady();
             }
             catch
             {
                 try { _ = core.AddScriptToExecuteOnDocumentCreatedAsync(YouTubeMainWorldInjectorJs); } catch { }
-                onReady();
             }
-            try { core.Navigate(dest); }
-            catch { onFailed(); }
         }
 
         private const string AdElementHiderJs = @"(function() {

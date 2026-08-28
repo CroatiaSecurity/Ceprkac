@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.5 — 2026-08-28
+
+Installer: `Ceprkac-0.7.5-Setup.exe`
+
+### YouTube ads (direction-independent)
+
+- The main-world YouTube ad blocker is now installed **once per tab, unconditionally**, at ad-blocker setup via `Page.addScriptToEvaluateOnNewDocument` — no longer armed lazily on a cancellable top-level `NavigationStarting`.
+- Ads are stripped regardless of how you reach a video: fresh page load, clicking a related/next video (SPA soft-navigation), and back/forward all run the main-world strip before YouTube's scripts, instead of only the first hard navigation.
+- Ad-blocking no longer silently drops after a renderer recovery — the injected script is bound to every new document, so it survives page-process restarts.
+- The main-world script self-guards on hostname (inert on non-YouTube hosts and on auth/OAuth pages), so installing it globally never affects other sites (Cloudflare forums, etc.).
+
+---
+
 ## 0.7.4 — 2026-08-25
 
 Installer: `Ceprkac-0.7.4-Setup.exe`
