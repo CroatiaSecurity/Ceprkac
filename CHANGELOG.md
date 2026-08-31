@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.8 — 2026-08-31
+
+Installer: `Ceprkac-0.7.8-Setup.exe`
+
+### Autofill: payment methods and addresses
+
+- **Saved credit/debit cards.** Menu → **Payment Methods...** manages a list of cards (nickname, cardholder, number, expiry, CVC). Stored encrypted at rest with DPAPI (CurrentUser scope) in `%AppData%\Ceprkac\cards.dat` — same scheme as saved passwords.
+- **Saved addresses / contact profiles.** Menu → **Addresses...** manages name, email, phone, and full postal address, stored DPAPI-encrypted in `%AppData%\Ceprkac\addresses.dat`.
+- **Checkout autofill.** On checkout/billing/shipping pages, Ceprkac detects card and address fields (via `autocomplete` attributes and common name/id patterns) and fills them. When more than one card or address is saved, a picker is shown so you choose which to use.
+- Card number and CVC never leave the local encrypted store. As with any browser-stored payment data, anything running as your Windows user can potentially decrypt it — same trust model as Chrome/Edge saved cards.
+
+---
+
 ## 0.7.7 — 2026-08-28
 
 Installer: `Ceprkac-0.7.7-Setup.exe`

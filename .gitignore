@@ -3,3 +3,4 @@ obj/
 releases/
 *.user
 route-cache-ceprkac.txt
+.gide_history.json

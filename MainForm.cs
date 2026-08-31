@@ -209,6 +209,7 @@ namespace Ceprkac
         public bool IsPopup { get; set; }
         public bool FocusOmnibox { get; set; }
         public DateTime LastAutoFillAttempt { get; set; } = DateTime.MinValue;
+        public DateTime LastAutoFillFormsAttempt { get; set; } = DateTime.MinValue;
     }
 
     // ───────────────────────── custom tab strip control ─────────────────────
@@ -595,12 +596,16 @@ namespace Ceprkac
         private readonly string bookmarksFile;
         private readonly string historyFile;
         private readonly string passwordsFile;
+        private readonly string cardsFile;
+        private readonly string addressesFile;
         private readonly string settingsFile;
         private readonly string downloadsFile;
         private readonly string configFile;
         private readonly List<BookmarkNode> bookmarks = new();
         private readonly List<string> history = new();
         private readonly List<SavedCredential> savedPasswords = new();
+        private readonly List<SavedCard> savedCards = new();
+        private readonly List<SavedAddress> savedAddresses = new();
         private readonly List<string> closedTabs = new();
         private readonly List<DownloadItem> downloads = new();
         private readonly AutoCompleteStringCollection addressSuggest = new();
@@ -644,6 +649,8 @@ namespace Ceprkac
             bookmarksFile = Path.Combine(appDataFolder, "bookmarks.txt");
             historyFile = Path.Combine(appDataFolder, "history.txt");
             passwordsFile = Path.Combine(appDataFolder, "passwords.dat");
+            cardsFile = Path.Combine(appDataFolder, "cards.dat");
+            addressesFile = Path.Combine(appDataFolder, "addresses.dat");
             settingsFile = Path.Combine(appDataFolder, "settings.txt");
             downloadsFile = Path.Combine(appDataFolder, "downloads.json");
             configFile = Path.Combine(appDataFolder, "config.json");
@@ -770,6 +777,9 @@ namespace Ceprkac
             menuStrip.Items.Add(new ToolStripSeparator());
             menuStrip.Items.Add(new ToolStripMenuItem("Import Passwords (CSV)...", null, (_, _) => ImportPasswordsCsv()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripMenuItem("Clear Saved Passwords", null, (_, _) => ClearPasswords()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripSeparator());
+            menuStrip.Items.Add(new ToolStripMenuItem("Payment Methods...", null, (_, _) => ManageCards()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Addresses...", null, (_, _) => ManageAddresses()) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripSeparator());
             menuStrip.Items.Add(new ToolStripMenuItem("DevTools", null, (_, _) => ActiveTab?.WebView.CoreWebView2?.OpenDevToolsWindow()) { ShortcutKeys = Keys.Control | Keys.I, ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripMenuItem("Change Search Engine...", null, (_, _) => { ShowSearchEnginePicker(); }) { ForeColor = Color.White, BackColor = Theme.ActiveTab });
@@ -929,6 +939,8 @@ namespace Ceprkac
                 LoadBookmarks();
                 LoadHistory();
                 LoadPasswords();
+                LoadCards();
+                LoadAddresses();
                 LoadDownloads();
                 LoadWindowState();
                 RefreshBookmarksBar();
@@ -1442,6 +1454,7 @@ namespace Ceprkac
                             return;
                         }
                         TryAutoFillCredentials(tab);
+                        TryAutoFillPaymentAndAddress(tab);
                         InjectAdElementHider(tab);
                     };
                     core.DocumentTitleChanged += (_, _) => { tab.Title = core.DocumentTitle ?? "New Tab"; if (ActiveTab == tab) Text = tab.Title + " - Ceprkac"; tabStrip.Invalidate(); };
@@ -3822,6 +3835,144 @@ namespace Ceprkac
             catch { }
         }
 
+        // ── Payment methods (cards) — DPAPI at rest, same scheme as passwords ──
+        private void LoadCards()
+        {
+            if (!File.Exists(cardsFile)) return;
+            try
+            {
+                var decrypted = ProtectedData.Unprotect(File.ReadAllBytes(cardsFile), null, DataProtectionScope.CurrentUser);
+                var json = Encoding.UTF8.GetString(decrypted);
+                savedCards.Clear();
+                foreach (var c in ParseCardJson(json)) savedCards.Add(c);
+            }
+            catch { /* corrupted or wrong user — ignore */ }
+        }
+
+        private void SaveCards()
+        {
+            try
+            {
+                var sb = new StringBuilder("[");
+                for (int i = 0; i < savedCards.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    var c = savedCards[i];
+                    sb.Append('{');
+                    sb.Append($"\"label\":\"{EscapeJson(c.Label)}\",");
+                    sb.Append($"\"name\":\"{EscapeJson(c.CardholderName)}\",");
+                    sb.Append($"\"num\":\"{EscapeJson(c.Number)}\",");
+                    sb.Append($"\"em\":\"{EscapeJson(c.ExpMonth)}\",");
+                    sb.Append($"\"ey\":\"{EscapeJson(c.ExpYear)}\",");
+                    sb.Append($"\"cvc\":\"{EscapeJson(c.Cvc)}\"");
+                    sb.Append('}');
+                }
+                sb.Append(']');
+                var encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(sb.ToString()), null, DataProtectionScope.CurrentUser);
+                File.WriteAllBytes(cardsFile, encrypted);
+            }
+            catch { }
+        }
+
+        // ── Addresses / contact profiles — DPAPI at rest ──
+        private void LoadAddresses()
+        {
+            if (!File.Exists(addressesFile)) return;
+            try
+            {
+                var decrypted = ProtectedData.Unprotect(File.ReadAllBytes(addressesFile), null, DataProtectionScope.CurrentUser);
+                var json = Encoding.UTF8.GetString(decrypted);
+                savedAddresses.Clear();
+                foreach (var a in ParseAddressJson(json)) savedAddresses.Add(a);
+            }
+            catch { /* corrupted or wrong user — ignore */ }
+        }
+
+        private void SaveAddresses()
+        {
+            try
+            {
+                var sb = new StringBuilder("[");
+                for (int i = 0; i < savedAddresses.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    var a = savedAddresses[i];
+                    sb.Append('{');
+                    sb.Append($"\"label\":\"{EscapeJson(a.Label)}\",");
+                    sb.Append($"\"name\":\"{EscapeJson(a.FullName)}\",");
+                    sb.Append($"\"email\":\"{EscapeJson(a.Email)}\",");
+                    sb.Append($"\"phone\":\"{EscapeJson(a.Phone)}\",");
+                    sb.Append($"\"l1\":\"{EscapeJson(a.Line1)}\",");
+                    sb.Append($"\"l2\":\"{EscapeJson(a.Line2)}\",");
+                    sb.Append($"\"city\":\"{EscapeJson(a.City)}\",");
+                    sb.Append($"\"state\":\"{EscapeJson(a.State)}\",");
+                    sb.Append($"\"zip\":\"{EscapeJson(a.PostalCode)}\",");
+                    sb.Append($"\"country\":\"{EscapeJson(a.Country)}\"");
+                    sb.Append('}');
+                }
+                sb.Append(']');
+                var encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(sb.ToString()), null, DataProtectionScope.CurrentUser);
+                File.WriteAllBytes(addressesFile, encrypted);
+            }
+            catch { }
+        }
+
+        private static List<SavedCard> ParseCardJson(string json)
+        {
+            var list = new List<SavedCard>();
+            int pos = 0;
+            while (pos < json.Length)
+            {
+                int objStart = json.IndexOf('{', pos);
+                if (objStart < 0) break;
+                int objEnd = json.IndexOf('}', objStart);
+                if (objEnd < 0) break;
+                string obj = json.Substring(objStart + 1, objEnd - objStart - 1);
+                var card = new SavedCard
+                {
+                    Label = ExtractJsonValue(obj, "label"),
+                    CardholderName = ExtractJsonValue(obj, "name"),
+                    Number = ExtractJsonValue(obj, "num"),
+                    ExpMonth = ExtractJsonValue(obj, "em"),
+                    ExpYear = ExtractJsonValue(obj, "ey"),
+                    Cvc = ExtractJsonValue(obj, "cvc"),
+                };
+                if (!string.IsNullOrEmpty(card.Number)) list.Add(card);
+                pos = objEnd + 1;
+            }
+            return list;
+        }
+
+        private static List<SavedAddress> ParseAddressJson(string json)
+        {
+            var list = new List<SavedAddress>();
+            int pos = 0;
+            while (pos < json.Length)
+            {
+                int objStart = json.IndexOf('{', pos);
+                if (objStart < 0) break;
+                int objEnd = json.IndexOf('}', objStart);
+                if (objEnd < 0) break;
+                string obj = json.Substring(objStart + 1, objEnd - objStart - 1);
+                var addr = new SavedAddress
+                {
+                    Label = ExtractJsonValue(obj, "label"),
+                    FullName = ExtractJsonValue(obj, "name"),
+                    Email = ExtractJsonValue(obj, "email"),
+                    Phone = ExtractJsonValue(obj, "phone"),
+                    Line1 = ExtractJsonValue(obj, "l1"),
+                    Line2 = ExtractJsonValue(obj, "l2"),
+                    City = ExtractJsonValue(obj, "city"),
+                    State = ExtractJsonValue(obj, "state"),
+                    PostalCode = ExtractJsonValue(obj, "zip"),
+                    Country = ExtractJsonValue(obj, "country"),
+                };
+                if (!string.IsNullOrEmpty(addr.FullName) || !string.IsNullOrEmpty(addr.Line1)) list.Add(addr);
+                pos = objEnd + 1;
+            }
+            return list;
+        }
+
         private void ImportPasswordsCsv()
         {
             using var dlg = new OpenFileDialog
@@ -3870,6 +4021,257 @@ namespace Ceprkac
             savedPasswords.Clear();
             SavePasswords();
             statusLabel.Text = "Passwords cleared.";
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // Payment / Address managers (list + add/edit/delete dialogs)
+        // ═══════════════════════════════════════════════════════════════
+
+        private void ManageCards()
+        {
+            using var dlg = new ListManagerDialog<SavedCard>(
+                "Payment Methods",
+                savedCards,
+                c => c.Display,
+                () => EditCardDialog(new SavedCard()),
+                existing => EditCardDialog(existing));
+            dlg.Font = _bookmarkFont ?? Font;
+            dlg.ShowDialog(this);
+            SaveCards();
+            statusLabel.Text = $"{savedCards.Count} payment method(s) saved.";
+        }
+
+        private void ManageAddresses()
+        {
+            using var dlg = new ListManagerDialog<SavedAddress>(
+                "Addresses",
+                savedAddresses,
+                a => a.Display,
+                () => EditAddressDialog(new SavedAddress()),
+                existing => EditAddressDialog(existing));
+            dlg.Font = _bookmarkFont ?? Font;
+            dlg.ShowDialog(this);
+            SaveAddresses();
+            statusLabel.Text = $"{savedAddresses.Count} address(es) saved.";
+        }
+
+        /// <summary>Modal editor for a card. Returns the edited card or null if cancelled.</summary>
+        private SavedCard? EditCardDialog(SavedCard card)
+        {
+            using var form = new FieldEditorForm("Payment Method");
+            var label = form.AddField("Nickname (optional)", card.Label);
+            var name = form.AddField("Cardholder name", card.CardholderName);
+            var number = form.AddField("Card number", card.Number);
+            var month = form.AddField("Expiry month (MM)", card.ExpMonth);
+            var year = form.AddField("Expiry year (YYYY)", card.ExpYear);
+            var cvc = form.AddField("CVC", card.Cvc, isPassword: true);
+            form.Build();
+            if (form.ShowDialog(this) != DialogResult.OK) return null;
+
+            card.Label = label.Text.Trim();
+            card.CardholderName = name.Text.Trim();
+            card.Number = new string(number.Text.Where(char.IsDigit).ToArray());
+            card.ExpMonth = month.Text.Trim();
+            card.ExpYear = year.Text.Trim();
+            card.Cvc = cvc.Text.Trim();
+            if (card.Number.Length < 12)
+            {
+                MessageBox.Show(this, "Card number looks too short.", "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return null;
+            }
+            return card;
+        }
+
+        /// <summary>Modal editor for an address. Returns the edited address or null if cancelled.</summary>
+        private SavedAddress? EditAddressDialog(SavedAddress addr)
+        {
+            using var form = new FieldEditorForm("Address");
+            var label = form.AddField("Nickname (optional)", addr.Label);
+            var name = form.AddField("Full name", addr.FullName);
+            var email = form.AddField("Email", addr.Email);
+            var phone = form.AddField("Phone", addr.Phone);
+            var l1 = form.AddField("Address line 1", addr.Line1);
+            var l2 = form.AddField("Address line 2", addr.Line2);
+            var city = form.AddField("City", addr.City);
+            var state = form.AddField("State / Region", addr.State);
+            var zip = form.AddField("Postal code", addr.PostalCode);
+            var country = form.AddField("Country", addr.Country);
+            form.Build();
+            if (form.ShowDialog(this) != DialogResult.OK) return null;
+
+            addr.Label = label.Text.Trim();
+            addr.FullName = name.Text.Trim();
+            addr.Email = email.Text.Trim();
+            addr.Phone = phone.Text.Trim();
+            addr.Line1 = l1.Text.Trim();
+            addr.Line2 = l2.Text.Trim();
+            addr.City = city.Text.Trim();
+            addr.State = state.Text.Trim();
+            addr.PostalCode = zip.Text.Trim();
+            addr.Country = country.Text.Trim();
+            if (string.IsNullOrWhiteSpace(addr.FullName) && string.IsNullOrWhiteSpace(addr.Line1))
+            {
+                MessageBox.Show(this, "Enter at least a name or a street address.", "Ceprkac", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return null;
+            }
+            return addr;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // Checkout autofill — card + address
+        // ═══════════════════════════════════════════════════════════════
+
+        private async void TryAutoFillPaymentAndAddress(BrowserTab tab)
+        {
+            if (savedCards.Count == 0 && savedAddresses.Count == 0) return;
+            // Debounce
+            if ((DateTime.Now - tab.LastAutoFillFormsAttempt).TotalSeconds < 3) return;
+            tab.LastAutoFillFormsAttempt = DateTime.Now;
+
+            var core = tab.WebView.CoreWebView2;
+            if (core == null) return;
+            string pageUrl = core.Source ?? "";
+            if (string.IsNullOrEmpty(pageUrl)) return;
+
+            string pathLower = "";
+            try { pathLower = (new Uri(pageUrl).PathAndQuery + " " + pageUrl).ToLowerInvariant(); } catch { pathLower = pageUrl.ToLowerInvariant(); }
+            bool looksLikeCheckout = pathLower.Contains("checkout") || pathLower.Contains("payment") || pathLower.Contains("billing")
+                || pathLower.Contains("shipping") || pathLower.Contains("address") || pathLower.Contains("cart")
+                || pathLower.Contains("order") || pathLower.Contains("pay");
+
+            // Detect the presence of card / address fields even when the URL is opaque.
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                await Task.Delay(700 + attempt * 500);
+                if (tab.WebView.IsDisposed || tab.WebView.CoreWebView2 == null) return;
+                core = tab.WebView.CoreWebView2;
+
+                string detectJs = @"(function(){
+                    function has(sel){ try { return !!document.querySelector(sel); } catch(e){ return false; } }
+                    var card = has('input[autocomplete=""cc-number""], input[name*=""card"" i][name*=""num"" i], input[id*=""card"" i][id*=""num"" i], input[autocomplete=""cc-csc""]');
+                    var addr = has('input[autocomplete=""street-address""], input[autocomplete=""address-line1""], input[name*=""address"" i], input[id*=""address"" i], input[autocomplete=""postal-code""], input[name*=""zip"" i], input[name*=""postal"" i]');
+                    return (card?'card':'') + '|' + (addr?'addr':'');
+                })()";
+
+                string result;
+                try { result = (await core.ExecuteScriptAsync(detectJs)).Trim('"'); }
+                catch { continue; }
+
+                bool hasCardFields = result.StartsWith("card");
+                bool hasAddrFields = result.EndsWith("addr");
+                if (!hasCardFields && !hasAddrFields)
+                {
+                    if (!looksLikeCheckout) return; // nothing to fill and not a checkout — stop
+                    continue;
+                }
+
+                // Fill address first (billing/shipping usually precedes card entry).
+                if (hasAddrFields && savedAddresses.Count > 0)
+                {
+                    if (savedAddresses.Count == 1) await FillAddress(core, savedAddresses[0]);
+                    else Invoke(() => ShowAddressPicker(tab));
+                }
+                if (hasCardFields && savedCards.Count > 0)
+                {
+                    if (savedCards.Count == 1) await FillCard(core, savedCards[0]);
+                    else Invoke(() => ShowCardPicker(tab));
+                }
+                Invoke(() => statusLabel.Text = "Autofilled saved details.");
+                return;
+            }
+        }
+
+        private static string JsStr(string s) =>
+            "'" + (s ?? "").Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "").Replace("\n", "") + "'";
+
+        private async Task FillCard(CoreWebView2 core, SavedCard c)
+        {
+            string js = $@"(function(){{
+                function setVal(el, val){{
+                    if(!el) return;
+                    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+                    setter.call(el, val);
+                    el.dispatchEvent(new Event('input',{{bubbles:true}}));
+                    el.dispatchEvent(new Event('change',{{bubbles:true}}));
+                }}
+                function pick(){{ for(var i=0;i<arguments.length;i++){{ try{{ var e=document.querySelector(arguments[i]); if(e) return e; }}catch(x){{}} }} return null; }}
+                setVal(pick('input[autocomplete=""cc-number""]','input[name*=""cardnumber"" i]','input[name*=""card"" i][name*=""num"" i]','input[id*=""card"" i][id*=""num"" i]'), {JsStr(c.Number)});
+                setVal(pick('input[autocomplete=""cc-name""]','input[name*=""cardholder"" i]','input[name*=""ccname"" i]','input[id*=""cardname"" i]'), {JsStr(c.CardholderName)});
+                setVal(pick('input[autocomplete=""cc-csc""]','input[name*=""cvc"" i]','input[name*=""cvv"" i]','input[id*=""cvc"" i]','input[id*=""cvv"" i]'), {JsStr(c.Cvc)});
+                // Combined MM/YY field
+                var exp = pick('input[autocomplete=""cc-exp""]','input[name*=""exp"" i]','input[id*=""exp"" i]');
+                if(exp) setVal(exp, {JsStr(c.ExpMonth + "/" + (c.ExpYear.Length >= 2 ? c.ExpYear.Substring(c.ExpYear.Length - 2) : c.ExpYear))});
+                setVal(pick('input[autocomplete=""cc-exp-month""]','select[autocomplete=""cc-exp-month""]','input[name*=""expmonth"" i]','[id*=""expmonth"" i]'), {JsStr(c.ExpMonth)});
+                setVal(pick('input[autocomplete=""cc-exp-year""]','select[autocomplete=""cc-exp-year""]','input[name*=""expyear"" i]','[id*=""expyear"" i]'), {JsStr(c.ExpYear)});
+            }})()";
+            try { await core.ExecuteScriptAsync(js); } catch { }
+        }
+
+        private async Task FillAddress(CoreWebView2 core, SavedAddress a)
+        {
+            string js = $@"(function(){{
+                function setVal(el, val){{
+                    if(!el || !val) return;
+                    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set
+                              || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
+                    setter.call(el, val);
+                    el.dispatchEvent(new Event('input',{{bubbles:true}}));
+                    el.dispatchEvent(new Event('change',{{bubbles:true}}));
+                }}
+                function pick(){{ for(var i=0;i<arguments.length;i++){{ try{{ var e=document.querySelector(arguments[i]); if(e) return e; }}catch(x){{}} }} return null; }}
+                setVal(pick('input[autocomplete=""name""]','input[name*=""fullname"" i]','input[name=""name""]','input[id*=""fullname"" i]'), {JsStr(a.FullName)});
+                setVal(pick('input[autocomplete=""email""]','input[type=""email""]','input[name*=""email"" i]'), {JsStr(a.Email)});
+                setVal(pick('input[autocomplete=""tel""]','input[type=""tel""]','input[name*=""phone"" i]'), {JsStr(a.Phone)});
+                setVal(pick('input[autocomplete=""address-line1""]','input[autocomplete=""street-address""]','input[name*=""address1"" i]','input[name*=""street"" i]','input[id*=""address1"" i]'), {JsStr(a.Line1)});
+                setVal(pick('input[autocomplete=""address-line2""]','input[name*=""address2"" i]','input[id*=""address2"" i]'), {JsStr(a.Line2)});
+                setVal(pick('input[autocomplete=""address-level2""]','input[name*=""city"" i]','input[id*=""city"" i]'), {JsStr(a.City)});
+                setVal(pick('input[autocomplete=""address-level1""]','input[name*=""state"" i]','input[name*=""region"" i]','input[id*=""state"" i]'), {JsStr(a.State)});
+                setVal(pick('input[autocomplete=""postal-code""]','input[name*=""zip"" i]','input[name*=""postal"" i]','input[id*=""zip"" i]','input[id*=""postal"" i]'), {JsStr(a.PostalCode)});
+                setVal(pick('input[autocomplete=""country""]','input[name*=""country"" i]','select[name*=""country"" i]','[id*=""country"" i]'), {JsStr(a.Country)});
+            }})()";
+            try { await core.ExecuteScriptAsync(js); } catch { }
+        }
+
+        private void ShowCardPicker(BrowserTab tab)
+        {
+            var picker = new ContextMenuStrip { BackColor = Theme.ActiveTab, ForeColor = Color.White, ShowImageMargin = false };
+            picker.Items.Add(new ToolStripMenuItem("Choose a card:") { Enabled = false, ForeColor = Theme.ForeDim });
+            picker.Items.Add(new ToolStripSeparator());
+            foreach (var card in savedCards)
+            {
+                var c = card;
+                var item = new ToolStripMenuItem(c.Display) { ForeColor = Color.White, BackColor = Theme.ActiveTab };
+                item.Click += async (_, _) =>
+                {
+                    picker.Close();
+                    var core = tab.WebView.CoreWebView2;
+                    if (core != null) { await FillCard(core, c); statusLabel.Text = $"Filled card •••• {c.Last4}"; }
+                };
+                picker.Items.Add(item);
+            }
+            var pt = webViewPanel.PointToScreen(new Point(webViewPanel.Width / 2 - 100, 10));
+            picker.Show(pt);
+        }
+
+        private void ShowAddressPicker(BrowserTab tab)
+        {
+            var picker = new ContextMenuStrip { BackColor = Theme.ActiveTab, ForeColor = Color.White, ShowImageMargin = false };
+            picker.Items.Add(new ToolStripMenuItem("Choose an address:") { Enabled = false, ForeColor = Theme.ForeDim });
+            picker.Items.Add(new ToolStripSeparator());
+            foreach (var address in savedAddresses)
+            {
+                var a = address;
+                var item = new ToolStripMenuItem(a.Display) { ForeColor = Color.White, BackColor = Theme.ActiveTab };
+                item.Click += async (_, _) =>
+                {
+                    picker.Close();
+                    var core = tab.WebView.CoreWebView2;
+                    if (core != null) { await FillAddress(core, a); statusLabel.Text = $"Filled address for {a.FullName}"; }
+                };
+                picker.Items.Add(item);
+            }
+            var pt = webViewPanel.PointToScreen(new Point(webViewPanel.Width / 2 - 100, 10));
+            picker.Show(pt);
         }
 
         private async void TryAutoFillCredentials(BrowserTab tab)
@@ -4146,5 +4548,215 @@ namespace Ceprkac
         public string Url { get; set; } = "";
         public string Username { get; set; } = "";
         public string Password { get; set; } = "";
+    }
+
+    /// <summary>
+    /// A stored payment method. Encrypted at rest with DPAPI (CurrentUser), same as passwords.
+    /// The card number and CVC are sensitive; they never leave the local encrypted store.
+    /// </summary>
+    internal sealed class SavedCard
+    {
+        public string Label { get; set; } = "";        // user-friendly nickname e.g. "Personal Visa"
+        public string CardholderName { get; set; } = "";
+        public string Number { get; set; } = "";        // digits only
+        public string ExpMonth { get; set; } = "";      // "01".."12"
+        public string ExpYear { get; set; } = "";        // 4-digit
+        public string Cvc { get; set; } = "";
+
+        /// <summary>Last 4 digits for display without exposing the full number.</summary>
+        public string Last4 => Number.Length >= 4 ? Number.Substring(Number.Length - 4) : Number;
+        public string Display => string.IsNullOrWhiteSpace(Label)
+            ? $"•••• {Last4}  ({ExpMonth}/{ExpYear})"
+            : $"{Label} — •••• {Last4}  ({ExpMonth}/{ExpYear})";
+    }
+
+    /// <summary>
+    /// A stored postal address / contact profile for checkout autofill. DPAPI-encrypted at rest.
+    /// </summary>
+    internal sealed class SavedAddress
+    {
+        public string Label { get; set; } = "";        // e.g. "Home", "Work"
+        public string FullName { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public string Line1 { get; set; } = "";
+        public string Line2 { get; set; } = "";
+        public string City { get; set; } = "";
+        public string State { get; set; } = "";
+        public string PostalCode { get; set; } = "";
+        public string Country { get; set; } = "";
+
+        public string Display => string.IsNullOrWhiteSpace(Label)
+            ? $"{FullName} — {Line1}, {City}"
+            : $"{Label}: {FullName} — {Line1}, {City}";
+    }
+
+    /// <summary>
+    /// Dark-themed vertical field editor. Call AddField() for each row, then Finalize(),
+    /// then ShowDialog(). Returns DialogResult.OK when the user clicks Save.
+    /// </summary>
+    internal sealed class FieldEditorForm : Form
+    {
+        private readonly TableLayoutPanel _layout;
+        private int _row;
+
+        public FieldEditorForm(string title)
+        {
+            Text = title;
+            BackColor = Theme.TitleBar;
+            ForeColor = Theme.ForeLight;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ClientSize = new Size(380, 100);
+            _layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                ColumnCount = 2,
+                Padding = new Padding(12),
+                BackColor = Theme.TitleBar,
+            };
+            _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+            _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            Controls.Add(_layout);
+        }
+
+        public TextBox AddField(string label, string value, bool isPassword = false)
+        {
+            var lbl = new Label
+            {
+                Text = label,
+                ForeColor = Theme.ForeLight,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                Height = 26,
+            };
+            var box = new TextBox
+            {
+                Text = value ?? "",
+                BackColor = Theme.AddressBox,
+                ForeColor = Theme.ForeLight,
+                BorderStyle = BorderStyle.FixedSingle,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                UseSystemPasswordChar = isPassword,
+            };
+            _layout.Controls.Add(lbl, 0, _row);
+            _layout.Controls.Add(box, 1, _row);
+            _row++;
+            return box;
+        }
+
+        public void Build()
+        {
+            var buttons = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                FlowDirection = FlowDirection.RightToLeft,
+                Height = 44,
+                Padding = new Padding(8),
+                BackColor = Theme.TitleBar,
+            };
+            var save = new Button { Text = "Save", DialogResult = DialogResult.OK, BackColor = Theme.ActiveTab, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Width = 90 };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, BackColor = Theme.InactiveTab, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Width = 90 };
+            buttons.Controls.Add(save);
+            buttons.Controls.Add(cancel);
+            Controls.Add(buttons);
+            AcceptButton = save;
+            CancelButton = cancel;
+            // Size to content
+            ClientSize = new Size(Math.Max(380, _layout.PreferredSize.Width + 24), _layout.PreferredSize.Height + buttons.Height + 8);
+        }
+    }
+
+    /// <summary>
+    /// Dark-themed list manager for a collection of items: shows items, and Add / Edit / Delete
+    /// buttons. addNew returns a new item (or null if cancelled); editExisting mutates/returns the
+    /// edited item (or null if cancelled). The backing list is mutated in place.
+    /// </summary>
+    internal sealed class ListManagerDialog<T> : Form where T : class
+    {
+        private readonly List<T> _items;
+        private readonly Func<T, string> _display;
+        private readonly Func<T?> _addNew;
+        private readonly Func<T, T?> _editExisting;
+        private readonly ListBox _list;
+
+        public ListManagerDialog(string title, List<T> items, Func<T, string> display, Func<T?> addNew, Func<T, T?> editExisting)
+        {
+            _items = items;
+            _display = display;
+            _addNew = addNew;
+            _editExisting = editExisting;
+
+            Text = title;
+            BackColor = Theme.TitleBar;
+            ForeColor = Theme.ForeLight;
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.SizableToolWindow;
+            ClientSize = new Size(460, 320);
+            MinimumSize = new Size(360, 240);
+
+            _list = new ListBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Theme.AddressBox,
+                ForeColor = Theme.ForeLight,
+                BorderStyle = BorderStyle.FixedSingle,
+                IntegralHeight = false,
+            };
+            _list.DoubleClick += (_, _) => EditSelected();
+
+            var bar = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                FlowDirection = FlowDirection.LeftToRight,
+                Height = 46,
+                Padding = new Padding(8),
+                BackColor = Theme.TitleBar,
+            };
+            Button Mk(string t) => new Button { Text = t, BackColor = Theme.ActiveTab, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Width = 90, Height = 28 };
+            var add = Mk("Add");
+            var edit = Mk("Edit");
+            var del = Mk("Delete");
+            var close = Mk("Close");
+            add.Click += (_, _) => { var n = _addNew(); if (n != null) { _items.Add(n); Refresh(); } };
+            edit.Click += (_, _) => EditSelected();
+            del.Click += (_, _) =>
+            {
+                if (_list.SelectedIndex >= 0 && _list.SelectedIndex < _items.Count)
+                {
+                    _items.RemoveAt(_list.SelectedIndex);
+                    Refresh();
+                }
+            };
+            close.Click += (_, _) => Close();
+            bar.Controls.Add(add);
+            bar.Controls.Add(edit);
+            bar.Controls.Add(del);
+            bar.Controls.Add(close);
+
+            Controls.Add(_list);
+            Controls.Add(bar);
+            Refresh();
+        }
+
+        private void EditSelected()
+        {
+            int idx = _list.SelectedIndex;
+            if (idx < 0 || idx >= _items.Count) return;
+            var edited = _editExisting(_items[idx]);
+            if (edited != null) { _items[idx] = edited; Refresh(); }
+        }
+
+        private new void Refresh()
+        {
+            _list.BeginUpdate();
+            _list.Items.Clear();
+            foreach (var item in _items) _list.Items.Add(_display(item));
+            _list.EndUpdate();
+        }
     }
 }

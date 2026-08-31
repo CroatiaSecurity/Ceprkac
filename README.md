@@ -2,11 +2,11 @@
 
 A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and **WebView2**. Same UI and features as [GBrowser](https://github.com/CroatiaSecurity/GBrowser), with Edge codecs so **H.264 / AAC** actually play (Discord embeds, typical HTML5 players).
 
-[![version](https://img.shields.io/badge/version-0.7.7-blue?style=flat-square)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.7.8-blue?style=flat-square)](CHANGELOG.md)
 [![.NET](https://img.shields.io/badge/.NET-Framework%204.8-512BD4?style=flat-square)](#requirements)
 [![engine](https://img.shields.io/badge/engine-WebView2%20(Chromium)-orange?style=flat-square)](#requirements)
 
-**Download:** [Ceprkac 0.7.7 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
+**Download:** [Ceprkac 0.7.8 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
 
 ---
 
@@ -15,6 +15,7 @@ A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and
 - Chrome-like tabs, dark UI, nested bookmarks, history, find-in-page, zoom
 - Omnibox search (Google, Bing, DuckDuckGo, Yahoo, Brave, Startpage)
 - Downloads with Save As; passwords (DPAPI) with auto-fill
+- Saved payment methods and addresses (DPAPI) with checkout auto-fill
 - Network + DOM ad blocking (`blocklist.txt`); passkeys dismissed
 - Injected-module cleaner (v0.7.1): **identity unload** on LDR load (queued, not under loader lock) and on WebView2 children — keep trees + bundled names + WinVerifyTrust; foreign/Temp/sideload plants `FreeLibrary` immediately
 - WebView2 Evergreen Runtime auto-installed if missing
@@ -39,7 +40,7 @@ dotnet run --project Ceprkac.csproj
 build.bat
 ```
 
-Output: `releases\0.7.7\Ceprkac-0.7.7-Setup.exe`
+Output: `releases\0.7.8\Ceprkac-0.7.8-Setup.exe`
 
 ## Default browser
 
@@ -55,7 +56,7 @@ Opening a link while Ceprkac is already running adds a tab in that window.
 
 ## Data
 
-All under `%AppData%\Ceprkac`: bookmarks, history, DPAPI passwords, settings, downloads, window geometry, WebView2 profile.
+All under `%AppData%\Ceprkac`: bookmarks, history, DPAPI passwords, DPAPI payment methods, DPAPI addresses, settings, downloads, window geometry, WebView2 profile.
 
 ## Disclaimer
 
