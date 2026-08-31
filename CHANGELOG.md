@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1 — 2026-08-31
+
+Installer: `Ceprkac-0.8.1-Setup.exe`
+
+### YouTube ads on first load + address bar flicker
+
+- **YouTube no longer shows ads until you refresh when a video is opened from a search-engine link.** The main-world JSON stripper (which removes `adPlacements` / `ytInitialData` ad payloads before page scripts run) was registered fire-and-forget. When a video opened directly into a new tab — e.g. clicked from a search result via `window.open` / `target=_blank` — navigation started before that CDP registration landed, so the first document loaded with ads intact. `SetupAdBlocker` now awaits the registration, and both the new-tab and new-window paths await `SetupAdBlocker` before navigating, so the stripper is always in place before the first YouTube document loads.
+- **The address bar no longer flickers rapidly.** The 0.8.0 autofill change re-triggered credential autofill on every `SourceChanged`. Autofill dispatches `input`/`change` events when it fills a field; on some SPAs that pushes a new history entry, re-raising `SourceChanged`, which re-ran autofill — a self-feeding loop that also re-ran the address-bar update many times a second. `SourceChanged` now re-triggers autofill only when the URL actually changed since its last attempt, which keeps Google's identifier → password step working without the loop.
+
+---
+
 ## 0.8.0 — 2026-08-31
 
 Installer: `Ceprkac-0.8.0-Setup.exe`

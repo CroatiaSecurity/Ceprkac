@@ -1,6 +1,6 @@
 ; Ceprkac Inno Setup Script
 #define MyAppName "Ceprkac"
-#define MyAppVersion "0.8.0"
+#define MyAppVersion "0.8.1"
 #define MyAppPublisher "Ceprkac"
 #define MyAppExeName "Ceprkac.exe"
 #define MyAppIcon "Ceprkac.ico"

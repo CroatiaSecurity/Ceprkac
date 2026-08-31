@@ -1,0 +1,25 @@
+# Normalize line endings: store as LF in the repo, check out as the platform
+# default in the working tree. Stops the recurring "LF will be replaced by CRLF"
+# warnings on this Windows-only project.
+* text=auto
+
+# Windows-native text formats — always CRLF in the working tree.
+*.cs      text eol=crlf
+*.ps1     text eol=crlf
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.iss     text eol=crlf
+*.csproj  text eol=crlf
+*.sln     text eol=crlf
+*.config  text eol=crlf
+*.manifest text eol=crlf
+*.json    text eol=crlf
+*.md      text eol=crlf
+*.txt     text eol=crlf
+*.html    text eol=crlf
+
+# Binary assets — never touched.
+*.exe     binary
+*.dll     binary
+*.zip     binary
+*.ico     binary

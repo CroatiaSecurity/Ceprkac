@@ -219,6 +219,12 @@ namespace Ceprkac
         // bumps the token, so the older loop self-cancels and does not clear the newer guard.
         public long AutoFillToken { get; set; }
         public bool AutoFillInProgress { get; set; }
+        // The URL that the SourceChanged handler last kicked an autofill attempt for. Autofill
+        // writes to input fields dispatch input/change events, which on some SPAs push a new
+        // history entry -> SourceChanged fires again -> autofill re-runs -> events -> ... a
+        // self-feeding loop that flickered the address bar. The SourceChanged handler only
+        // re-triggers autofill when core.Source differs from this, breaking the loop.
+        public string LastSourceAutoFillUrl { get; set; } = "";
     }
 
     // ───────────────────────── custom tab strip control ─────────────────────
@@ -1475,9 +1481,19 @@ namespace Ceprkac
                         if (ActiveTab == tab && !addressBox.Focused)
                             SetAddressText(tab.Url);
                         // SPA / client-side route changes (e.g. Google's identifier -> password
-                        // step) often do NOT raise NavigationCompleted. Retry autofill here too;
-                        // the per-URL guard inside prevents duplicate work.
-                        TryAutoFillCredentials(tab);
+                        // step) often do NOT raise NavigationCompleted. Retry autofill here too —
+                        // BUT only once per distinct URL. Autofill dispatches input/change events
+                        // when it fills a field; on some SPAs that pushes a new history entry,
+                        // which re-raises SourceChanged. Without this guard that formed a
+                        // self-feeding loop that fired autofill (and SetAddressText) continuously,
+                        // flickering the address bar many times a second. Re-triggering only when
+                        // the URL actually changed since the last SourceChanged-driven attempt
+                        // keeps the identifier -> password step working without the loop.
+                        if (!string.Equals(tab.LastSourceAutoFillUrl, tab.Url, StringComparison.OrdinalIgnoreCase))
+                        {
+                            tab.LastSourceAutoFillUrl = tab.Url;
+                            TryAutoFillCredentials(tab);
+                        }
                     };
                     core.NewWindowRequested += (_, args) =>
                     {
@@ -1570,8 +1586,9 @@ namespace Ceprkac
                         }
                     };
 
-                    // Ad blocker — network-level request blocking
-                    SetupAdBlocker(core);
+                    // Ad blocker — network-level request blocking. Awaited so the YouTube
+                    // main-world JSON stripper is registered before this tab navigates.
+                    await SetupAdBlocker(core);
                 }
                 if (!string.IsNullOrWhiteSpace(tab.Url)) NavigateTab(tab, tab.Url);
                 if (tab.FocusOmnibox) FocusAddressBar(selectAll: true);
@@ -1728,7 +1745,13 @@ namespace Ceprkac
                 core.DownloadStarting += Core_DownloadStarting;
                 core.ContextMenuRequested += Core_ContextMenuRequested;
                 core.PermissionRequested += Core_PermissionRequested;
-                SetupAdBlocker(core);
+                // Awaited so the YouTube main-world JSON stripper is registered BEFORE the
+                // opener starts navigating this new window. When a YouTube video is opened via
+                // window.open / target=_blank (e.g. from a search-engine result), the parent
+                // begins navigation as soon as args.NewWindow is assigned — which is right after
+                // this method returns. Registering the CDP script first is what removes the
+                // "ads until refresh" symptom on that path.
+                await SetupAdBlocker(core);
                 _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
             }
             SwitchToTab(insertIndex);
@@ -3294,7 +3317,7 @@ namespace Ceprkac
 
         private int adsBlockedCount = 0;
 
-        private void SetupAdBlocker(CoreWebView2 core)
+        private async Task SetupAdBlocker(CoreWebView2 core)
         {
             // Track whether the current page is whitelisted — avoids per-request URI parsing
             bool pageIsWhitelisted = false;
@@ -3364,7 +3387,14 @@ namespace Ceprkac
             // scripts on EVERY document — including SPA soft-navigations (clicking a related
             // video), back/forward, and renderer recovery — so ad-blocking no longer depends on
             // the direction the user arrived at the video from.
-            _ = InstallYouTubeMainWorld(core);
+            //
+            // This is AWAITED (callers await SetupAdBlocker before the tab navigates) so the
+            // CDP registration is in place BEFORE the first document loads. Previously this was
+            // fire-and-forget, which lost a race when a YouTube video was opened directly (e.g.
+            // clicked from a search-engine result into a new tab): the first document's
+            // ytInitialData/ytInitialPlayerResponse loaded with ads intact because the JSON
+            // stripper had not registered yet — hence "ads until you refresh".
+            await InstallYouTubeMainWorld(core);
 
             // Inject fetch/XHR blocker into main world via DevTools Protocol
             core.NavigationCompleted += (_, _) => InjectMainWorldBlocker(core);
