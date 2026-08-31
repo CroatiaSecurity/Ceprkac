@@ -1738,7 +1738,18 @@ namespace Ceprkac
             if (core != null)
             {
                 core.NavigationStarting += (_, _) => { tab.IsLoading = true; tabStrip.Invalidate(); };
-                core.NavigationCompleted += (_, _) => { tab.IsLoading = false; UpdateTabState(tab); tabStrip.Invalidate(); };
+                core.NavigationCompleted += (_, _) =>
+                {
+                    tab.IsLoading = false;
+                    UpdateTabState(tab);
+                    tabStrip.Invalidate();
+                    // New-window tabs (a video opened from a search-engine result via
+                    // target=_blank/window.open) need the DOM + player ad scrubber too. Without
+                    // this the new window relied solely on the main-world CDP script; if that
+                    // missed the first document, ads played until a manual refresh. YouTubeAdBlockerJs
+                    // hides ad elements and fast-forwards playing video ads as a reactive net.
+                    InjectAdElementHider(tab);
+                };
                 core.DocumentTitleChanged += (_, _) => { tab.Title = core.DocumentTitle ?? "New Tab"; tabStrip.Invalidate(); };
                 core.SourceChanged += (_, _) => { tab.Url = core.Source ?? ""; if (ActiveTab == tab && !addressBox.Focused) SetAddressText(tab.Url); };
                 core.WindowCloseRequested += (_, _) => { int ti = tabStrip.Tabs.IndexOf(tab); if (ti >= 0) CloseTab(ti); };
@@ -3410,6 +3421,14 @@ namespace Ceprkac
         {
             try
             {
+                // The Page domain MUST be enabled before Page.addScriptToEvaluateOnNewDocument
+                // takes effect. Without Page.enable the registration is accepted but does not
+                // reliably bind to the NEXT document — so the first YouTube load (e.g. clicking
+                // a result from a search engine) ran page scripts before the stripper installed,
+                // and only a refresh — which happens after the domain has settled — blocked ads.
+                // Enabling Page first makes the registration apply to the very first document.
+                try { await core.CallDevToolsProtocolMethodAsync("Page.enable", "{}"); } catch { }
+
                 string escapedJs = YouTubeMainWorldCode.Replace("\\", "\\\\").Replace("\"", "\\\"");
                 string cdpParams = "{\"source\":\"" + escapedJs + "\"}";
                 await core.CallDevToolsProtocolMethodAsync("Page.addScriptToEvaluateOnNewDocument", cdpParams);

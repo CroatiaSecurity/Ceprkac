@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.2 — 2026-08-31
+
+Installer: `Ceprkac-0.8.2-Setup.exe`
+
+### YouTube ads on first load — actual root cause
+
+- **The main-world ad-stripper is now enabled before the first document loads.** The stripper is injected via the CDP `Page.addScriptToEvaluateOnNewDocument`, but the `Page` domain was never enabled first. Without `Page.enable`, the registration is accepted but does not reliably bind to the next document, so the first YouTube load (e.g. clicking a video from a search-engine result) ran page scripts before the stripper installed — only a refresh, which happens after the domain has settled, blocked ads. `InstallYouTubeMainWorld` now calls `Page.enable` before registering the script.
+- **New-window tabs now run the DOM + player ad scrubber too.** A video opened from a search result via `target=_blank` / `window.open` goes through the new-window path, whose `NavigationCompleted` never invoked the DOM scrubber — it relied solely on the CDP script. It now runs `InjectAdElementHider`, which hides ad elements and fast-forwards playing video ads as a reactive net independent of CDP timing.
+
+---
+
 ## 0.8.1 — 2026-08-31
 
 Installer: `Ceprkac-0.8.1-Setup.exe`
