@@ -210,6 +210,15 @@ namespace Ceprkac
         public bool FocusOmnibox { get; set; }
         public DateTime LastAutoFillAttempt { get; set; } = DateTime.MinValue;
         public DateTime LastAutoFillFormsAttempt { get; set; } = DateTime.MinValue;
+        // The URL the last credential autofill actually ran against. A genuinely new
+        // URL (e.g. Google's identifier -> password page) must always re-attempt even
+        // if it happens inside the time-based debounce window.
+        public string LastAutoFillUrl { get; set; } = "";
+        // Monotonic token identifying the most recent autofill loop. A loop only owns the
+        // "in progress" state while its token is current; a newer invocation (for a new URL)
+        // bumps the token, so the older loop self-cancels and does not clear the newer guard.
+        public long AutoFillToken { get; set; }
+        public bool AutoFillInProgress { get; set; }
     }
 
     // ───────────────────────── custom tab strip control ─────────────────────
@@ -1465,6 +1474,10 @@ namespace Ceprkac
                         // Only skip when the user is actively editing the address box.
                         if (ActiveTab == tab && !addressBox.Focused)
                             SetAddressText(tab.Url);
+                        // SPA / client-side route changes (e.g. Google's identifier -> password
+                        // step) often do NOT raise NavigationCompleted. Retry autofill here too;
+                        // the per-URL guard inside prevents duplicate work.
+                        TryAutoFillCredentials(tab);
                     };
                     core.NewWindowRequested += (_, args) =>
                     {
@@ -4276,10 +4289,6 @@ namespace Ceprkac
 
         private async void TryAutoFillCredentials(BrowserTab tab)
         {
-            // Debounce — don't re-trigger within 3 seconds of last attempt
-            if ((DateTime.Now - tab.LastAutoFillAttempt).TotalSeconds < 3) return;
-            tab.LastAutoFillAttempt = DateTime.Now;
-
             if (savedPasswords.Count == 0) return;
             var core = tab.WebView.CoreWebView2;
             if (core == null) return;
@@ -4287,25 +4296,56 @@ namespace Ceprkac
             string pageUrl = core.Source ?? "";
             if (string.IsNullOrEmpty(pageUrl)) return;
 
+            // Per-URL de-dupe: if a loop is already running for THIS exact URL, skip.
+            // But a genuinely different URL (identifier -> password step) always proceeds
+            // even while an older loop is still retrying — the older loop self-cancels when
+            // it notices core.Source moved on. This is what removes both the "need to
+            // refresh" symptom and the stuck-on-email-page symptom.
+            if (tab.AutoFillInProgress
+                && string.Equals(tab.LastAutoFillUrl, pageUrl, StringComparison.OrdinalIgnoreCase))
+                return;
+            if (!tab.AutoFillInProgress
+                && string.Equals(tab.LastAutoFillUrl, pageUrl, StringComparison.OrdinalIgnoreCase)
+                && (DateTime.Now - tab.LastAutoFillAttempt).TotalSeconds < 3)
+                return;
+
             string? pageDomain = null;
             try { pageDomain = new Uri(pageUrl).Host.ToLower(); } catch { return; }
 
             var matches = savedPasswords.Where(p =>
             {
-                try { return new Uri(p.Url).Host.ToLower() == pageDomain; }
+                try
+                {
+                    var savedHost = new Uri(p.Url).Host.ToLower();
+                    // Match exact host or registrable-domain suffix so accounts.google.com
+                    // credentials fill on the google.com password step and vice versa.
+                    return savedHost == pageDomain
+                        || pageDomain!.EndsWith("." + savedHost, StringComparison.Ordinal)
+                        || savedHost.EndsWith("." + pageDomain, StringComparison.Ordinal);
+                }
                 catch { return false; }
             }).ToList();
 
             if (matches.Count == 0) return;
 
-            // Only attempt autofill on login-like pages
+            // Login-like page heuristic. A page that actually contains a password field is
+            // always treated as a login page even if the path has no login keyword — this
+            // covers Google's /signin/v2/challenge/pwd and similar password-only steps.
             string pathLower = "";
             try { pathLower = new Uri(pageUrl).PathAndQuery.ToLower(); } catch { }
             bool isLoginPage = pathLower.Contains("login") || pathLower.Contains("signin") || pathLower.Contains("sign-in")
                 || pathLower.Contains("auth") || pathLower.Contains("account") || pathLower.Contains("sso")
+                || pathLower.Contains("challenge") || pathLower.Contains("pwd") || pathLower.Contains("identifier")
                 || pathLower.Contains("register") || pathLower.Contains("signup") || pathLower.Contains("sign-up");
-            if (!isLoginPage) return;
 
+            // Mark this URL as claimed up front so a concurrent NavigationCompleted /
+            // SourceChanged pair does not run two loops against the same page.
+            tab.LastAutoFillAttempt = DateTime.Now;
+            tab.LastAutoFillUrl = pageUrl;
+            tab.AutoFillInProgress = true;
+            long myToken = ++tab.AutoFillToken;
+            try
+            {
             // Retry up to 6 times with increasing delays for SPA pages
             for (int attempt = 0; attempt < 6; attempt++)
             {
@@ -4313,6 +4353,13 @@ namespace Ceprkac
 
                 if (tab.WebView.IsDisposed || tab.WebView.CoreWebView2 == null) return;
                 core = tab.WebView.CoreWebView2;
+
+                // Self-cancel if a newer autofill invocation superseded this one, or the
+                // page navigated away from the URL this loop started for (email -> password
+                // step). Either way the newer invocation owns the current page.
+                if (tab.AutoFillToken != myToken) return;
+                if (!string.Equals(core.Source ?? "", pageUrl, StringComparison.OrdinalIgnoreCase))
+                    return;
 
                 // Check for ANY input fields — password, email, text, tel
                 string checkJs = @"(function() {
@@ -4343,11 +4390,24 @@ namespace Ceprkac
 
                     if (fieldStatus == "none") continue;
 
-                    // Only autofill if there's a password field, or it's a known login page with a username field
-                    if (fieldStatus == "useronly" && !isLoginPage)
-                        return; // Not a login page, just has text inputs — skip
+                    // A password field present means the page is a login step regardless of the
+                    // URL path — this is what makes Google's separate password page work.
+                    if (fieldStatus == "pwonly")
+                    {
+                        // Password-only step (Google identifier -> pwd, or a re-auth prompt).
+                        // Do NOT hunt for a username field: it is hidden and Google ignores
+                        // writes to it. Fill the password only.
+                        if (matches.Count == 1)
+                        {
+                            await FillPasswordOnly(core, matches[0].Password);
+                            Invoke(() => statusLabel.Text = $"Auto-filled password for {pageDomain}");
+                        }
+                        else
+                            Invoke(() => ShowCredentialPicker(tab, matches, passwordOnly: true));
+                        return;
+                    }
 
-                    if (fieldStatus == "both" || fieldStatus == "pwonly")
+                    if (fieldStatus == "both")
                     {
                         if (matches.Count == 1)
                         {
@@ -4361,10 +4421,13 @@ namespace Ceprkac
 
                     if (fieldStatus == "useronly")
                     {
+                        // Username/email-only step (Google identifier page, or a page that has
+                        // not yet revealed the password field). Only fill on a real login page.
+                        if (!isLoginPage) return;
                         if (matches.Count == 1)
                         {
                             await FillUsernameOnly(core, matches[0].Username);
-                            Invoke(() => statusLabel.Text = $"Filled username for {pageDomain} (enter password manually or wait)");
+                            Invoke(() => statusLabel.Text = $"Filled username for {pageDomain} (continue to password step)");
                         }
                         else
                             Invoke(() => ShowCredentialPicker(tab, matches));
@@ -4374,6 +4437,14 @@ namespace Ceprkac
                 catch { }
             }
             try { Invoke(() => statusLabel.Text = $"No login fields detected on {pageDomain}"); } catch { }
+            }
+            finally
+            {
+                // Only clear the guard if we are still the current loop; a newer invocation
+                // may already own it.
+                if (tab.AutoFillToken == myToken)
+                    tab.AutoFillInProgress = false;
+            }
         }
 
         private async Task FillUsernameOnly(CoreWebView2 core, string username)
@@ -4400,6 +4471,30 @@ namespace Ceprkac
                     user.dispatchEvent(new Event('change', {{bubbles:true}}));
                     user.dispatchEvent(new Event('blur', {{bubbles:true}}));
                 }}
+            }})()";
+            await core.ExecuteScriptAsync(js);
+        }
+
+        private async Task FillPasswordOnly(CoreWebView2 core, string password)
+        {
+            // Fill ONLY the visible password field. Password-only steps (Google's
+            // /signin/v2/challenge/pwd, re-auth prompts) carry a hidden username input
+            // that the site populates itself; writing to it can break the flow.
+            string safePwd = password.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\n", "");
+            string js = $@"(function() {{
+                var pws = document.querySelectorAll('input[type=""password""]');
+                var pw = null;
+                for (var i = 0; i < pws.length; i++) {{
+                    // Prefer a visible password field over a hidden/offscreen one.
+                    if (pws[i].offsetParent !== null && pws[i].offsetWidth > 0) {{ pw = pws[i]; break; }}
+                }}
+                if (!pw && pws.length) pw = pws[0];
+                if (!pw) return;
+                var nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                nativeSet.call(pw, '{safePwd}');
+                pw.dispatchEvent(new Event('input', {{bubbles:true}}));
+                pw.dispatchEvent(new Event('change', {{bubbles:true}}));
+                pw.dispatchEvent(new Event('blur', {{bubbles:true}}));
             }})()";
             await core.ExecuteScriptAsync(js);
         }
@@ -4452,7 +4547,7 @@ namespace Ceprkac
             await core.ExecuteScriptAsync(fillJs);
         }
 
-        private void ShowCredentialPicker(BrowserTab tab, List<SavedCredential> matches)
+        private void ShowCredentialPicker(BrowserTab tab, List<SavedCredential> matches, bool passwordOnly = false)
         {
             var picker = new ContextMenuStrip { BackColor = Theme.ActiveTab, ForeColor = Color.White, ShowImageMargin = false };
             picker.Items.Add(new ToolStripMenuItem("Select account:") { Enabled = false, ForeColor = Theme.ForeDim });
@@ -4468,8 +4563,18 @@ namespace Ceprkac
                     var core = tab.WebView.CoreWebView2;
                     if (core != null)
                     {
-                        await FillCredentials(core, c.Username, c.Password);
-                        statusLabel.Text = $"Filled credentials for {c.Username}";
+                        if (passwordOnly)
+                        {
+                            // Password-only step (e.g. Google's separate password page):
+                            // fill the password field only, leave the hidden username alone.
+                            await FillPasswordOnly(core, c.Password);
+                            statusLabel.Text = $"Filled password for {c.Username}";
+                        }
+                        else
+                        {
+                            await FillCredentials(core, c.Username, c.Password);
+                            statusLabel.Text = $"Filled credentials for {c.Username}";
+                        }
                     }
                 };
                 picker.Items.Add(item);

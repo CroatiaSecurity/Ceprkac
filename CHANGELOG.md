@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0 — 2026-08-31
+
+Installer: `Ceprkac-0.8.0-Setup.exe`
+
+### Credential autofill: first-load timing + Google two-step login
+
+- **Passwords now fill on the first page load — no manual refresh needed.** The old autofill used an aggressive 3-second time debounce that was set *before* a retry loop lasting up to ~12 seconds, so the first `NavigationCompleted` locked out the real form load and multiple SPA navigations were dropped. Autofill is now keyed per-URL with a monotonic token: a genuinely new page always re-attempts, and a stale retry loop self-cancels the moment the page navigates on.
+- **Google's two-step sign-in (email page → separate password page) is handled.** Autofill now also triggers on `SourceChanged`, so the client-side route to Google's password step is caught even without a full navigation. Domain matching accepts registrable-domain suffixes (so `accounts.google.com` credentials fill on the `google.com` password step). A password-only page fills only the visible password field via the new `FillPasswordOnly` path, leaving Google's hidden username input alone instead of fighting it.
+- The account picker (multiple saved logins for a site) now respects password-only pages too.
+
+---
+
 ## 0.7.9 — 2026-08-31
 
 Installer: `Ceprkac-0.7.9-Setup.exe`
