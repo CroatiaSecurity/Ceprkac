@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.9 — 2026-08-31
+
+Installer: `Ceprkac-0.7.9-Setup.exe`
+
+### Injected-module cleaner: full loadable-module-extension coverage
+
+- **The in-process and child-process module cleaner now covers every loadable module extension, not just `.dll`.** `InjectedModuleCleaner` enumerates every mapped module via `EnumProcessModulesEx` regardless of extension and its keep/unload decision is path + Microsoft-family signature — so a foreign or user-writable-drop module is unloaded whether it is a `.dll`, a managed `.winmd` (WinRT metadata carrying MSIL), an `.ocx`, `.cpl`, `.ax`, `.node`, `.drv`, `.acm`, `.tsp`, `.mui`, or `.efi`.
+- **Bundled framework modules are kept regardless of extension.** `Microsoft.*.winmd` and `System.*.winmd` shipped next to `Ceprkac.exe` (WinUI/WinRT) are no longer misjudged as foreign — `IsBundledFileName` now recognizes any loadable-module extension.
+- **Search-order hijack detection is extension-aware.** Sideload target base names (`dbghelp`, `version`, `winmm`, …) are matched against any loadable-module extension rather than a hardcoded `.dll` list.
+- No change to the unload primitive (queued `FreeLibrary` APC) or the keep-tree (Windows, .NET, Edge/WebView2, GPU vendors).
+
+---
+
 ## 0.7.8 — 2026-08-31
 
 Installer: `Ceprkac-0.7.8-Setup.exe`

@@ -144,14 +144,38 @@ namespace Ceprkac
             DiscoverEdgeRuntimeFolders(add);
         }
 
+        /// <summary>
+        /// Loadable-module extensions. Modules are enumerated via EnumProcessModulesEx
+        /// regardless of extension, so the filename-keyed helpers below must not be
+        /// .dll-only: a bundled Microsoft.*.winmd / System.*.winmd (WinRT/WinUI) or a
+        /// sideload plant with a non-.dll module extension must still be classified.
+        /// </summary>
+        private static readonly HashSet<string> ModuleExtensions =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ".dll", ".winmd", ".ocx", ".cpl", ".ax", ".node",
+                ".drv", ".acm", ".tsp", ".mui", ".efi",
+            };
+
+        internal static bool IsModuleExtension(string? fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            string ext;
+            try { ext = Path.GetExtension(fileName) ?? ""; }
+            catch { return false; }
+            return ext.Length > 0 && ModuleExtensions.Contains(ext);
+        }
+
         internal static bool IsBundledFileName(string? fileName)
         {
             if (string.IsNullOrEmpty(fileName)) return false;
             var n = fileName!.ToLowerInvariant();
             if (n == "ceprkac.exe" || n == "webview2loader.dll") return true;
-            if (n.StartsWith("microsoft.", StringComparison.Ordinal) && n.EndsWith(".dll", StringComparison.Ordinal))
-                return true;
-            if (n.StartsWith("system.", StringComparison.Ordinal) && n.EndsWith(".dll", StringComparison.Ordinal))
+            // Microsoft.* / System.* framework modules — any loadable-module extension
+            // (WinUI/WinRT ship Microsoft.*.winmd and System.*.winmd next to the app).
+            if ((n.StartsWith("microsoft.", StringComparison.Ordinal) ||
+                 n.StartsWith("system.", StringComparison.Ordinal)) &&
+                IsModuleExtension(n))
                 return true;
             return false;
         }
@@ -197,35 +221,28 @@ namespace Ceprkac
             return false;
         }
 
+        /// <summary>
+        /// Search-order hijack target base names (dbghelp, version, winmm, …). These are
+        /// classic .dll names, but matching is done on the base name + any loadable-module
+        /// extension so a plant that maps as a non-.dll module variant is still caught.
+        /// </summary>
+        private static readonly HashSet<string> SideloadBaseNames =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                "dbghelp", "version", "winmm", "dwrite", "cryptsp", "userenv",
+                "profapi", "wtsapi32", "dhcpcsvc", "iphlpapi", "msasn1", "netapi32",
+                "samcli", "sspicli", "crypt32", "textshaping", "winhttp", "urlmon",
+                "propsys", "dwmapi",
+            };
+
         private static bool IsSideloadFileName(string fileName)
         {
             if (string.IsNullOrEmpty(fileName)) return false;
-            switch (fileName.ToLowerInvariant())
-            {
-                case "dbghelp.dll":
-                case "version.dll":
-                case "winmm.dll":
-                case "dwrite.dll":
-                case "cryptsp.dll":
-                case "userenv.dll":
-                case "profapi.dll":
-                case "wtsapi32.dll":
-                case "dhcpcsvc.dll":
-                case "iphlpapi.dll":
-                case "msasn1.dll":
-                case "netapi32.dll":
-                case "samcli.dll":
-                case "sspicli.dll":
-                case "crypt32.dll":
-                case "textshaping.dll":
-                case "winhttp.dll":
-                case "urlmon.dll":
-                case "propsys.dll":
-                case "dwmapi.dll":
-                    return true;
-                default:
-                    return false;
-            }
+            if (!IsModuleExtension(fileName)) return false;
+            string baseName;
+            try { baseName = Path.GetFileNameWithoutExtension(fileName) ?? ""; }
+            catch { return false; }
+            return baseName.Length > 0 && SideloadBaseNames.Contains(baseName);
         }
 
         private static bool IsUserWritableDrop(string n)
