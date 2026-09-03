@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.3 — 2026-09-03
+
+Installer: `Ceprkac-0.8.3-Setup.exe`
+
+### Surfing convenience (Chrome-like polish)
+
+- **Address bar shows the page you are on.** Live URL updates no longer skip just because the omnibox had focus (that race left the bar stuck on the previous page / referrer). Updates only pause while you are actively typing; Escape restores the real URL. `HistoryChanged` is wired too.
+- **First keystroke in the address bar is kept.** Suggest/autocomplete is enabled only *after* the character has landed (`TextChanged` + `BeginInvoke`), never during `KeyPress` — enabling Suggest mid-keystroke recreated the EDIT handle and ate the first letter whenever a URL was selected.
+- **Image / video context menu.** Right-click offers **Search image with Google Lens** (or your engine’s reverse-image search), open media in a new tab, and copy address. CDN image hosts without file extensions are detected; Lens is also the fallback when the default engine has no reverse-image vertical.
+- **Saved passwords offer reliably.** New-window / `target=_blank` tabs now run credential + checkout autofill. Focusing a username/password field re-triggers offers. The account picker is a real on-screen dialog (clamped to the working area) instead of a `ContextMenuStrip` that could miss on small windows. Username detection no longer treats random text boxes as login fields, and offers still appear on non-keyword login URLs when a real email/username field exists.
+- **Save password?** After a login form submit, Ceprkac prompts to save or update the password (DPAPI store).
+- **Manage Passwords...** in the menu (view / add / edit / delete).
+- **Hover URL in the status bar** (link under cursor).
+- **Duplicate Tab** (`Ctrl+Shift+K`). Bookmark star fill state actually paints.
+
+### Codebase
+
+- Split the ~4900-line `MainForm.cs` into focused files: `Theme`, `ChromeControls`, `Models`, `Dialogs`, and partials for Downloads, ContextMenu, Bookmarks, Settings, AdBlock, Autofill.
+
+---
+
 ## 0.8.2 — 2026-08-31
 
 Installer: `Ceprkac-0.8.2-Setup.exe`

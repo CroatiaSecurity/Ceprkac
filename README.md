@@ -2,21 +2,23 @@
 
 A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and **WebView2**. Same UI and features as [GBrowser](https://github.com/CroatiaSecurity/GBrowser), with Edge codecs so **H.264 / AAC** actually play (Discord embeds, typical HTML5 players).
 
-[![version](https://img.shields.io/badge/version-0.8.2-blue?style=flat-square)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.8.3-blue?style=flat-square)](CHANGELOG.md)
 [![.NET](https://img.shields.io/badge/.NET-Framework%204.8-512BD4?style=flat-square)](#requirements)
 [![engine](https://img.shields.io/badge/engine-WebView2%20(Chromium)-orange?style=flat-square)](#requirements)
 
-**Download:** [Ceprkac 0.8.2 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
+**Download:** [Ceprkac 0.8.3 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
 
 ---
 
 ## Features
 
 - Chrome-like tabs, dark UI, nested bookmarks, history, find-in-page, zoom
-- Omnibox search (Google, Bing, DuckDuckGo, Yahoo, Brave, Startpage)
-- Downloads with Save As; passwords (DPAPI) with auto-fill
+- Omnibox search (Google, Bing, DuckDuckGo, Yahoo, Brave, Startpage) — first keystroke kept; live URL while browsing
+- Right-click image → Google Lens / reverse-image search; video/media search; copy/open address
+- Downloads with Save As; passwords (DPAPI) with auto-fill, focus offers, save prompt, Manage Passwords
 - Saved payment methods and addresses (DPAPI) with checkout auto-fill
 - Network + DOM ad blocking (`blocklist.txt`); passkeys dismissed
+- Hover link URL in the status bar; duplicate tab (`Ctrl+Shift+K`)
 - Injected-module cleaner (v0.7.1, all module extensions in v0.7.9): **identity unload** on LDR load (queued, not under loader lock) and on WebView2 children — keep trees + bundled names + WinVerifyTrust; foreign/Temp/sideload plants `FreeLibrary` immediately. Covers every loadable module extension (`.dll`, `.winmd`, `.ocx`, `.node`, …), not just `.dll`
 - WebView2 Evergreen Runtime auto-installed if missing
 - Optional **default browser**: http/https + HTML files; links open in the existing window
@@ -24,9 +26,10 @@ A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and
 | Shortcut | Action | Shortcut | Action |
 |---|---|---|---|
 | `Ctrl+T` / `Ctrl+W` | New / close tab | `Ctrl+Shift+T` | Restore tab |
-| `Ctrl+Tab` | Next tab | `Ctrl+L` | Focus address bar |
-| `Ctrl+D` | Bookmark | `Ctrl+F` | Find in page |
-| `Ctrl+I` | DevTools | `Ctrl+Plus` / `Minus` / `0` | Zoom |
+| `Ctrl+Shift+K` | Duplicate tab | `Ctrl+Tab` | Next tab |
+| `Ctrl+L` | Focus address bar | `Ctrl+D` | Bookmark |
+| `Ctrl+F` | Find in page | `Ctrl+I` | DevTools |
+| `Ctrl+Plus` / `Minus` / `0` | Zoom | | |
 
 ## Requirements
 
@@ -40,7 +43,7 @@ dotnet run --project Ceprkac.csproj
 build.bat
 ```
 
-Output: `releases\0.8.2\Ceprkac-0.8.2-Setup.exe`
+Output: `releases\0.8.3\Ceprkac-0.8.3-Setup.exe`
 
 ## Default browser
 
