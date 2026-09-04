@@ -108,6 +108,10 @@ namespace Ceprkac
         private DateTime lastProcessRecover = DateTime.MinValue;
         private readonly List<string> pendingExternalUrls = new();
         private DateTime lastCredentialOfferUi = DateTime.MinValue;
+        // Hosts where the user dismissed the credential menu — do not keep popping offers
+        // so they can type a password manually.
+        private readonly HashSet<string> dismissedCredentialHosts = new(StringComparer.OrdinalIgnoreCase);
+        private ContextMenuStrip? credentialPickerMenu;
 
         private BrowserTab? ActiveTab => tabStrip.SelectedIndex >= 0 && tabStrip.SelectedIndex < tabStrip.Tabs.Count
             ? tabStrip.Tabs[tabStrip.SelectedIndex] : null;

@@ -576,6 +576,8 @@ namespace Ceprkac
             }).ToList();
 
             if (matches.Count == 0) return;
+            // User already chose "type manually" (or closed the menu) for this host — leave them alone.
+            if (IsCredentialOfferDismissed(pageUrl)) return;
 
             // Login-like page heuristic (path keywords). Password fields always count as login
             // regardless of path. Username-only uses explicit email/username selectors — not a
@@ -800,123 +802,142 @@ namespace Ceprkac
             await core.ExecuteScriptAsync(fillJs);
         }
 
-        // Form-based picker (not ContextMenuStrip) so it always appears — even when the
-        // browser window is tiny, off the primary monitor, or the webview panel is narrow.
+        // Non-modal menu — never ShowDialog. A modal dialog blocked the page so the user
+        // could not type a password by hand (especially with multiple saved logins).
         private void ShowCredentialPicker(BrowserTab tab, List<SavedCredential> matches, bool passwordOnly = false)
         {
             if (matches.Count == 0) return;
-            // Debounce so closing the picker (which refocuses the field) does not re-open it.
-            if ((DateTime.Now - lastCredentialOfferUi).TotalMilliseconds < 2000) return;
+            string pageUrl = "";
+            try { pageUrl = tab.WebView.CoreWebView2?.Source ?? tab.Url ?? ""; } catch { pageUrl = tab.Url ?? ""; }
+            if (IsCredentialOfferDismissed(pageUrl)) return;
+            if ((DateTime.Now - lastCredentialOfferUi).TotalMilliseconds < 1500) return;
             lastCredentialOfferUi = DateTime.Now;
 
             void ShowUi()
             {
-                using var form = new Form
+                if (credentialPickerMenu != null)
                 {
-                    Text = "Saved passwords",
-                    FormBorderStyle = FormBorderStyle.FixedDialog,
-                    StartPosition = FormStartPosition.Manual,
-                    MinimizeBox = false,
-                    MaximizeBox = false,
-                    ShowInTaskbar = false,
+                    try { credentialPickerMenu.Close(); credentialPickerMenu.Dispose(); } catch { }
+                    credentialPickerMenu = null;
+                }
+
+                bool chose = false;
+                var picker = new ContextMenuStrip
+                {
                     BackColor = Theme.ActiveTab,
                     ForeColor = Color.White,
-                    ClientSize = new Size(340, Math.Min(420, 56 + matches.Count * 36 + 52)),
-                    Font = _bookmarkFont ?? Font,
+                    ShowImageMargin = false,
+                    AutoClose = true,
                 };
+                credentialPickerMenu = picker;
+                picker.Items.Add(new ToolStripMenuItem(
+                    passwordOnly ? "Choose a password:" : "Choose an account:")
+                { Enabled = false, ForeColor = Theme.ForeDim });
+                picker.Items.Add(new ToolStripSeparator());
+
+                foreach (var cred in matches)
+                {
+                    var c = cred;
+                    string host = c.Url;
+                    try { host = new Uri(c.Url).Host; } catch { }
+                    var item = new ToolStripMenuItem($"{c.Username}  ({host})")
+                    {
+                        ForeColor = Color.White,
+                        BackColor = Theme.ActiveTab,
+                    };
+                    item.Click += async (_, _) =>
+                    {
+                        chose = true;
+                        picker.Close();
+                        var core = tab.WebView.CoreWebView2;
+                        if (core == null) return;
+                        try
+                        {
+                            if (passwordOnly)
+                            {
+                                await FillPasswordOnly(core, c.Password);
+                                statusLabel.Text = $"Filled password for {c.Username}";
+                            }
+                            else
+                            {
+                                await FillCredentials(core, c.Username, c.Password);
+                                statusLabel.Text = $"Filled credentials for {c.Username}";
+                            }
+                        }
+                        catch { }
+                    };
+                    picker.Items.Add(item);
+                }
+
+                picker.Items.Add(new ToolStripSeparator());
+                var dismiss = new ToolStripMenuItem("Type password manually…")
+                {
+                    ForeColor = Color.White,
+                    BackColor = Theme.ActiveTab,
+                };
+                dismiss.Click += (_, _) =>
+                {
+                    chose = true;
+                    DismissCredentialOffer(pageUrl);
+                    picker.Close();
+                    try { tab.WebView.Focus(); } catch { }
+                };
+                picker.Items.Add(dismiss);
+
+                picker.Closed += (_, _) =>
+                {
+                    // Closed without picking = leave the page alone for this URL.
+                    if (!chose) DismissCredentialOffer(pageUrl);
+                    if (ReferenceEquals(credentialPickerMenu, picker))
+                        credentialPickerMenu = null;
+                    try { picker.Dispose(); } catch { }
+                };
+
+                // Clamp to the working area so a tiny window still shows the menu on-screen.
+                Point pt;
                 try
                 {
                     var screen = Screen.FromControl(this).WorkingArea;
-                    var origin = webViewPanel.PointToScreen(new Point(Math.Max(8, webViewPanel.Width / 2 - 170), 12));
-                    int x = Math.Max(screen.Left + 8, Math.Min(origin.X, screen.Right - form.Width - 8));
-                    int y = Math.Max(screen.Top + 8, Math.Min(origin.Y, screen.Bottom - form.Height - 8));
-                    // If the webview is very short, pin under the toolbar instead.
+                    pt = webViewPanel.PointToScreen(new Point(Math.Max(8, webViewPanel.Width / 2 - 80), 10));
                     if (webViewPanel.Height < 120)
-                        y = Math.Max(screen.Top + 8, PointToScreen(new Point(0, navPanel.Bottom)).Y + 4);
-                    form.Location = new Point(x, y);
+                        pt = new Point(pt.X, PointToScreen(new Point(0, navPanel.Bottom)).Y + 4);
+                    pt = new Point(
+                        Math.Max(screen.Left + 4, Math.Min(pt.X, screen.Right - 200)),
+                        Math.Max(screen.Top + 4, Math.Min(pt.Y, screen.Bottom - 80)));
                 }
                 catch
                 {
-                    form.StartPosition = FormStartPosition.CenterParent;
+                    pt = webViewPanel.PointToScreen(new Point(20, 10));
                 }
-
-                var header = new Label
-                {
-                    Text = passwordOnly ? "Choose a password to fill:" : "Choose an account to fill:",
-                    Dock = DockStyle.Top,
-                    Height = 28,
-                    TextAlign = ContentAlignment.MiddleLeft,
-                    Padding = new Padding(10, 0, 0, 0),
-                    ForeColor = Theme.ForeDim,
-                };
-                var list = new ListBox
-                {
-                    Dock = DockStyle.Fill,
-                    BackColor = Theme.AddressBox,
-                    ForeColor = Color.White,
-                    BorderStyle = BorderStyle.None,
-                    IntegralHeight = false,
-                };
-                foreach (var c in matches)
-                {
-                    string host = c.Url;
-                    try { host = new Uri(c.Url).Host; } catch { }
-                    list.Items.Add($"{c.Username}  ({host})");
-                }
-                if (list.Items.Count > 0) list.SelectedIndex = 0;
-
-                var buttons = new FlowLayoutPanel
-                {
-                    Dock = DockStyle.Bottom,
-                    Height = 40,
-                    FlowDirection = FlowDirection.RightToLeft,
-                    Padding = new Padding(8, 4, 8, 4),
-                    BackColor = Theme.ActiveTab,
-                };
-                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 80, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.TabHover };
-                var fill = new Button { Text = "Fill", DialogResult = DialogResult.OK, Width = 80, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.TabHover };
-                buttons.Controls.Add(cancel);
-                buttons.Controls.Add(fill);
-                form.AcceptButton = fill;
-                form.CancelButton = cancel;
-                list.DoubleClick += (_, _) => { form.DialogResult = DialogResult.OK; form.Close(); };
-
-                form.Controls.Add(list);
-                form.Controls.Add(buttons);
-                form.Controls.Add(header);
-
-                if (form.ShowDialog(this) != DialogResult.OK) return;
-                int idx = list.SelectedIndex;
-                if (idx < 0 || idx >= matches.Count) return;
-                var chosen = matches[idx];
-                var core = tab.WebView.CoreWebView2;
-                if (core == null) return;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        if (passwordOnly)
-                        {
-                            await FillPasswordOnly(core, chosen.Password);
-                            BeginInvoke(new Action(() => statusLabel.Text = $"Filled password for {chosen.Username}"));
-                        }
-                        else
-                        {
-                            // Prefer full fill; username-only pages still benefit from username write.
-                            await FillCredentials(core, chosen.Username, chosen.Password);
-                            BeginInvoke(new Action(() => statusLabel.Text = $"Filled credentials for {chosen.Username}"));
-                        }
-                    }
-                    catch { }
-                });
+                picker.Show(pt);
             }
 
             if (InvokeRequired) BeginInvoke(new Action(ShowUi));
             else ShowUi();
         }
 
-        // Injected into every document: offer autofill when a login field is focused, and
-        // ask to save after a password form submit. Works regardless of window size.
+        private bool IsCredentialOfferDismissed(string? pageUrl)
+        {
+            if (string.IsNullOrEmpty(pageUrl)) return false;
+            try
+            {
+                var host = new Uri(pageUrl!).Host.ToLowerInvariant();
+                return dismissedCredentialHosts.Contains(host);
+            }
+            catch { return dismissedCredentialHosts.Contains(pageUrl!); }
+        }
+
+        private void DismissCredentialOffer(string? pageUrl)
+        {
+            if (string.IsNullOrEmpty(pageUrl)) return;
+            try
+            {
+                dismissedCredentialHosts.Add(new Uri(pageUrl!).Host.ToLowerInvariant());
+            }
+            catch { dismissedCredentialHosts.Add(pageUrl!); }
+        }
+
+        // Save-password prompt only — do NOT re-offer on every field focus (that blocked typing).
         private const string AutofillAssistJs = @"
 (function(){
   if (window.__ceprkacAutofillAssist) return;
@@ -932,13 +953,6 @@ namespace Ceprkac
     var n = ((el.name||'') + ' ' + (el.id||'') + ' ' + (el.autocomplete||'') + ' ' + (el.placeholder||'') + ' ' + (el.getAttribute('aria-label')||'')).toLowerCase();
     return /user|email|login|identifier|phone|account/.test(n);
   }
-  document.addEventListener('focusin', function(e){
-    var t = e.target;
-    if (!t || t.tagName !== 'INPUT') return;
-    var ty = (t.type||'').toLowerCase();
-    if (ty === 'password') post({type:'autofill-focus', kind:'password', url: location.href});
-    else if (isUserField(t)) post({type:'autofill-focus', kind:'username', url: location.href});
-  }, true);
   function collect(form){
     var root = form || document;
     var pw = root.querySelector('input[type=""password""]');
@@ -967,7 +981,6 @@ namespace Ceprkac
                 try { raw = args.WebMessageAsJson; } catch { return; }
             }
             if (string.IsNullOrWhiteSpace(raw)) return;
-            // postMessage may arrive as a JSON string value (quoted) or as a raw object.
             string json = raw.Trim();
             if (json.Length >= 2 && json[0] == '"')
             {
@@ -980,12 +993,8 @@ namespace Ceprkac
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("type", out var typeEl)) return;
                 var type = typeEl.GetString() ?? "";
-                if (type == "autofill-focus")
-                {
-                    // User focused a login field — offer even if the automatic navigation pass missed it.
-                    BeginInvoke(new Action(() => OfferCredentialsForFocusedField(tab)));
-                }
-                else if (type == "password-submit")
+                // Ignore legacy autofill-focus messages if an older document script is still around.
+                if (type == "password-submit")
                 {
                     string url = root.TryGetProperty("url", out var u) ? (u.GetString() ?? "") : "";
                     string username = root.TryGetProperty("username", out var n) ? (n.GetString() ?? "") : "";
@@ -995,14 +1004,6 @@ namespace Ceprkac
                 }
             }
             catch { }
-        }
-
-        private void OfferCredentialsForFocusedField(BrowserTab tab)
-        {
-            // Re-run the shared autofill path (per-URL debounce + field detection). This is what
-            // makes offers appear when the first navigation pass missed a late-rendered form,
-            // independent of window size.
-            TryAutoFillCredentials(tab);
         }
 
         private void OfferSavePassword(string url, string username, string password)

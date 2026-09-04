@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.4 — 2026-09-03
+
+Installer: `Ceprkac-0.8.4-Setup.exe`
+
+### Fix: password field blocked by modal dialog
+
+- **You can type passwords again.** The 0.8.3 account picker used a modal `ShowDialog`, which froze the page (Google / Discord / etc.) whenever more than one saved login matched. It is a non-modal menu again.
+- **No more re-pop on every focus.** The focusin → autofill loop that reopened the picker when you clicked the password box is removed. Closing the menu or choosing **Type password manually…** dismisses offers for that site for the rest of the session.
+
+---
+
 ## 0.8.3 — 2026-09-03
 
 Installer: `Ceprkac-0.8.3-Setup.exe`
