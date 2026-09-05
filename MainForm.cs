@@ -222,8 +222,6 @@ namespace Ceprkac
             {
                 if (char.IsControl(e.KeyChar)) return;
                 addressUserEditing = true;
-                // User is typing — stop the focus-assertion timer
-                if (ActiveTab != null) ActiveTab.FocusOmnibox = false;
             };
             addressBox.TextChanged += (_, _) =>
             {
@@ -851,8 +849,6 @@ namespace Ceprkac
             try { url = tab.WebView.CoreWebView2?.Source ?? tab.Url ?? ""; }
             catch { url = tab.Url ?? ""; }
             if (!string.IsNullOrEmpty(url)) tab.Url = url;
-            // Don't overwrite an empty address bar that the user is about to type into.
-            if (string.IsNullOrEmpty(url) && addressUserEditing) return;
             if (ActiveTab != tab) return;
             SetAddressText(url, force: force);
         }
@@ -980,11 +976,8 @@ namespace Ceprkac
 
             // Set editing flag BEFORE SwitchToTab so SyncAddressBarFromTab
             // skips overwriting the address bar with the home URL.
-            if (focusOmnibox)
-            {
-                addressUserEditing = true;
-                tab.Url = ""; // prevent SyncAddressBarFromTab from writing homePageUrl back
-            }
+            // tab.Url stays as-is (homePageUrl) so NavigateTab fires correctly.
+            if (focusOmnibox) addressUserEditing = true;
 
             SwitchToTab(insertIndex);
             if (focusOmnibox)
