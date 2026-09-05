@@ -247,6 +247,9 @@ namespace Ceprkac
             };
             addressBox.LostFocus += (_, _) =>
             {
+                // Don't reset during new-tab focus assertion — the timer is
+                // actively fighting WebView2 for focus and we must not undo it.
+                if (ActiveTab?.FocusOmnibox == true) return;
                 addressUserEditing = false;
                 try
                 {
@@ -998,6 +1001,9 @@ namespace Ceprkac
                     ticks++;
                     if (ticks > 12 || !tab.FocusOmnibox || addressBox.IsDisposed)
                     {
+                        // Timer expired without user typing — clear flag so
+                        // LostFocus works normally if user clicks elsewhere.
+                        tab.FocusOmnibox = false;
                         focusTimer.Stop();
                         focusTimer.Dispose();
                         return;
