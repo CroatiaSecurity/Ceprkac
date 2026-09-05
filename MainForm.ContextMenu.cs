@@ -20,11 +20,83 @@ namespace Ceprkac
 {
     public partial class MainForm
     {
+        // Captures the real right-click target before WebView2 builds its menu.
+        // ContextMenuTarget often reports Kind=Page with empty SourceUri on Discord/CDN
+        // images, CSS backgrounds, and in-page viewers — so without this, Lens never appears.
+        private const string ContextCaptureJs = @"
+(function(){
+  if (window.__ceprkacCtxCap) return;
+  window.__ceprkacCtxCap = true;
+  window.__ceprkacLastCtx = null;
+  function absUrl(u){
+    if(!u) return '';
+    try { return new URL(u, location.href).href; } catch(e){ return u; }
+  }
+  function mediaFrom(el){
+    if (!el || el===document || el===window) return null;
+    var tag = (el.tagName||'').toUpperCase();
+    if (tag==='IMG' || tag==='IMAGE' || tag==='PICTURE') {
+      var s = el.currentSrc || el.src || el.getAttribute('src') || '';
+      if (!s && tag==='PICTURE') {
+        var im = el.querySelector('img');
+        if (im) s = im.currentSrc || im.src || '';
+      }
+      if (s) return {kind:'image', src:absUrl(s)};
+    }
+    if (tag==='VIDEO' || tag==='AUDIO') {
+      var s2 = el.currentSrc || el.src || '';
+      if (!s2 && el.querySelector) {
+        var srcEl = el.querySelector('source');
+        if (srcEl) s2 = srcEl.src || srcEl.getAttribute('src') || '';
+      }
+      if (s2) return {kind:'video', src:absUrl(s2)};
+    }
+    if (tag==='A') {
+      var href = el.href || '';
+      var img = el.querySelector && el.querySelector('img,video');
+      if (img) {
+        var is = img.currentSrc || img.src || '';
+        if (is) return {kind: (img.tagName||'').toUpperCase()==='VIDEO' ? 'video' : 'image', src:absUrl(is), href:href};
+      }
+      if (href) return {kind:'link', href:href};
+    }
+    if (tag==='SOURCE' && el.parentElement) return mediaFrom(el.parentElement);
+    try {
+      var bg = (window.getComputedStyle(el).backgroundImage || '');
+      var m = /url\(\s*[""']?([^""')]+)[""']?\s*\)/i.exec(bg);
+      if (m && m[1] && m[1].indexOf('data:')!==0) return {kind:'image', src:absUrl(m[1])};
+    } catch(e){}
+    return null;
+  }
+  document.addEventListener('contextmenu', function(e){
+    var t = e.target;
+    var info = null;
+    for (var i=0; i<8 && t; i++) {
+      info = mediaFrom(t);
+      if (info) break;
+      t = t.parentElement;
+    }
+    var sel = '';
+    try { sel = (window.getSelection() && window.getSelection().toString()) || ''; } catch(x){}
+    window.__ceprkacLastCtx = {
+      kind: info ? info.kind : 'page',
+      src: info && info.src ? info.src : '',
+      href: info && info.href ? info.href : '',
+      sel: sel
+    };
+  }, true);
+})();";
+
         private void Core_ContextMenuRequested(object? sender, CoreWebView2ContextMenuRequestedEventArgs e)
         {
             if (sharedEnvironment == null) return;
             var core = sender as CoreWebView2;
             if (core == null) return;
+
+            // Defer so we can read the JS-captured target (sync ContextMenuTarget is often empty).
+            CoreWebView2Deferral? deferral = null;
+            try { deferral = e.GetDeferral(); } catch { }
+
             string sourceUri = "";
             string linkUri = "";
             string selectionText = "";
@@ -38,16 +110,73 @@ namespace Ceprkac
                 try { selectionText = target.SelectionText ?? ""; } catch { }
             }
             catch { }
-            ReplaceNativeSaveAs(e.MenuItems, "saveImageAs", core, sourceUri);
-            ReplaceNativeSaveAs(e.MenuItems, "saveVideoAs", core, sourceUri);
-            ReplaceNativeSaveAs(e.MenuItems, "saveAudioAs", core, sourceUri);
-            ReplaceNativeSaveAs(e.MenuItems, "saveLinkAs", core, linkUri);
-            AddSearchMenuItems(e.MenuItems, kind, selectionText, sourceUri, linkUri);
+
+            var menuItems = e.MenuItems;
+            ReplaceNativeSaveAs(menuItems, "saveImageAs", core, sourceUri);
+            ReplaceNativeSaveAs(menuItems, "saveVideoAs", core, sourceUri);
+            ReplaceNativeSaveAs(menuItems, "saveAudioAs", core, sourceUri);
+            ReplaceNativeSaveAs(menuItems, "saveLinkAs", core, linkUri);
+
+            if (deferral == null)
+            {
+                AddSearchMenuItems(menuItems, kind, selectionText, sourceUri, linkUri);
+                return;
+            }
+
+            _ = CompleteContextMenuAsync(core, menuItems, kind, selectionText, sourceUri, linkUri, deferral);
         }
 
-        // Adds "Search {engine} for ..." entries to the WebView2 context menu based on
-        // what was right-clicked: selected text (text search), an image (reverse/image
-        // search by URL / Google Lens), or a video/audio element (video search by URL).
+        private async Task CompleteContextMenuAsync(
+            CoreWebView2 core,
+            IList<CoreWebView2ContextMenuItem> items,
+            CoreWebView2ContextMenuTargetKind kind,
+            string selectionText,
+            string sourceUri,
+            string linkUri,
+            CoreWebView2Deferral deferral)
+        {
+            try
+            {
+                try
+                {
+                    var raw = await core.ExecuteScriptAsync(
+                        "window.__ceprkacLastCtx ? JSON.stringify(window.__ceprkacLastCtx) : 'null'");
+                    // ExecuteScript returns a JSON-encoded string value.
+                    string? json = null;
+                    try { json = JsonSerializer.Deserialize<string>(raw); } catch { json = raw?.Trim('"'); }
+                    if (!string.IsNullOrWhiteSpace(json) && json != "null")
+                    {
+                        using var doc = JsonDocument.Parse(json!);
+                        var root = doc.RootElement;
+                        string jsKind = root.TryGetProperty("kind", out var k) ? (k.GetString() ?? "") : "";
+                        string jsSrc = root.TryGetProperty("src", out var s) ? (s.GetString() ?? "") : "";
+                        string jsHref = root.TryGetProperty("href", out var h) ? (h.GetString() ?? "") : "";
+                        string jsSel = root.TryGetProperty("sel", out var sel) ? (sel.GetString() ?? "") : "";
+
+                        if (string.IsNullOrWhiteSpace(selectionText) && !string.IsNullOrWhiteSpace(jsSel))
+                            selectionText = jsSel;
+                        if (string.IsNullOrWhiteSpace(sourceUri) && !string.IsNullOrWhiteSpace(jsSrc))
+                            sourceUri = jsSrc;
+                        if (string.IsNullOrWhiteSpace(linkUri) && !string.IsNullOrWhiteSpace(jsHref))
+                            linkUri = jsHref;
+
+                        if (string.Equals(jsKind, "image", StringComparison.OrdinalIgnoreCase))
+                            kind = CoreWebView2ContextMenuTargetKind.Image;
+                        else if (string.Equals(jsKind, "video", StringComparison.OrdinalIgnoreCase))
+                            kind = CoreWebView2ContextMenuTargetKind.Video;
+                    }
+                }
+                catch { }
+
+                AddSearchMenuItems(items, kind, selectionText, sourceUri, linkUri);
+            }
+            finally
+            {
+                try { deferral.Complete(); } catch { }
+            }
+        }
+
+        // Adds "Search {engine} for ..." / Google Lens entries based on what was right-clicked.
         private void AddSearchMenuItems(
             IList<CoreWebView2ContextMenuItem> items,
             CoreWebView2ContextMenuTargetKind kind,
@@ -95,7 +224,6 @@ namespace Ceprkac
                 catch { }
             }
 
-            // Selected text → text search (works for any target kind that carries a selection).
             var sel = (selectionText ?? "").Trim();
             if (sel.Length > 0)
             {
@@ -103,15 +231,11 @@ namespace Ceprkac
                 AddItem($"Search {engine} for \"{shown}\"", BuildTextSearchUrl(sel));
             }
 
-            // Prefer the media/source URI; fall back to a link that points at a media file.
-            // Some in-page image/video viewers report Kind = Page/Other, so do not rely on
-            // Kind alone — infer from the URI / CDN patterns as well.
             var mediaUri = !string.IsNullOrWhiteSpace(sourceUri) ? sourceUri : linkUri;
 
             bool isImage = kind == CoreWebView2ContextMenuTargetKind.Image
                            || LooksLikeImageUrl(sourceUri) || LooksLikeImageUrl(linkUri)
                            || LooksLikeImageHost(sourceUri) || LooksLikeImageHost(linkUri);
-            // Kind=Image always wins even when the CDN URL has no file extension.
             if (kind == CoreWebView2ContextMenuTargetKind.Image && !string.IsNullOrWhiteSpace(sourceUri))
                 isImage = true;
 
@@ -121,10 +245,9 @@ namespace Ceprkac
 
             if (isImage && !string.IsNullOrWhiteSpace(mediaUri))
             {
-                // Explicit Lens label when Google is the default engine; otherwise engine-named image search.
-                if (SearchHost().Contains("google."))
-                    AddItem("Search image with Google Lens", BuildImageSearchUrl(mediaUri));
-                else
+                // Always offer Lens for images (independent of default search engine).
+                AddItem("Search image with Google Lens", "https://lens.google.com/uploadbyurl?url=" + Uri.EscapeDataString(mediaUri));
+                if (!SearchHost().Contains("google."))
                     AddItem($"Search {engine} for this image", BuildImageSearchUrl(mediaUri));
                 AddItem("Open image in new tab", mediaUri);
                 AddCopy("Copy image address", mediaUri);
@@ -143,8 +266,6 @@ namespace Ceprkac
 
             if (toAdd.Count == 0) return;
 
-            // Insert our items at the top of the menu, each guarded independently so one
-            // failure never suppresses the rest. Separator is best-effort and last.
             int idx = 0;
             foreach (var it in toAdd)
             {
@@ -153,8 +274,9 @@ namespace Ceprkac
             }
             try
             {
+                // Empty string label — null has failed to construct a separator on some runtimes.
                 var sep = sharedEnvironment.CreateContextMenuItem(
-                    null, null, CoreWebView2ContextMenuItemKind.Separator);
+                    "", null, CoreWebView2ContextMenuItemKind.Separator);
                 items.Insert(idx, sep);
             }
             catch { }
@@ -170,6 +292,7 @@ namespace Ceprkac
             "twimg.com", "fbcdn.net", "cdninstagram.com", "pinimg.com",
             "imgur.com", "i.imgur.com", "wikimedia.org", "cloudinary.com",
             "imgix.net", "akamaihd.net", "discordapp.net", "discordcdn.com",
+            "discordapp.com", "media.discordapp.net", "cdn.discordapp.com",
             "media.tenor.com", "giphy.com"
         };
 
@@ -187,7 +310,8 @@ namespace Ceprkac
                     if (host == h || host.EndsWith("." + h, StringComparison.Ordinal)) return true;
                 var path = u.AbsolutePath.ToLowerInvariant();
                 if (path.Contains("/image") || path.Contains("/img/") || path.Contains("/thumb")
-                    || path.Contains("/photo") || path.Contains("/media/") || path.Contains("/avatar"))
+                    || path.Contains("/photo") || path.Contains("/media/") || path.Contains("/avatar")
+                    || path.Contains("/attachments/") || path.Contains("/icons/"))
                     return true;
             }
             catch { }
@@ -200,7 +324,6 @@ namespace Ceprkac
             string path;
             try { path = new Uri(url!).AbsolutePath.ToLowerInvariant(); }
             catch { path = url!.ToLowerInvariant(); }
-            // Strip query-like suffixes that sometimes stick to the path segment.
             int q = path.IndexOf('@');
             if (q > 0) path = path.Substring(0, q);
             foreach (var e in exts)
@@ -208,7 +331,6 @@ namespace Ceprkac
             return false;
         }
 
-        // Resolve a friendly name for the active search engine from its search template.
         private string CurrentSearchEngineName()
         {
             foreach (var (name, _, search) in SearchEngines)
@@ -223,8 +345,6 @@ namespace Ceprkac
         private string BuildTextSearchUrl(string query) =>
             string.Format(searchUrlTemplate, Uri.EscapeDataString(query));
 
-        // Image search: Google Lens by URL; Bing/Yandex reverse image; others fall back
-        // to a normal query of the image URL.
         private string BuildImageSearchUrl(string imageUrl)
         {
             var host = SearchHost();
@@ -235,11 +355,9 @@ namespace Ceprkac
                 return "https://www.bing.com/images/search?q=imgurl:" + enc + "&view=detailv2&iss=sbi";
             if (host.Contains("yandex."))
                 return "https://yandex.com/images/search?rpt=imageview&url=" + enc;
-            // Always offer Lens as a capable fallback when the default engine has no reverse-image vertical.
             return "https://lens.google.com/uploadbyurl?url=" + enc;
         }
 
-        // Video search: Google/Bing support a video vertical; others fall back to a query.
         private string BuildVideoSearchUrl(string videoUrl)
         {
             var host = SearchHost();

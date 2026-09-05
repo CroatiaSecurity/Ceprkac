@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.5 — 2026-09-04
+
+Installer: `Ceprkac-0.8.5-Setup.exe`
+
+### Context menu + embedded YouTube ads
+
+- **Google Lens / image & video search now show up.** WebView2 often reports `Kind=Page` with an empty source URI on Discord/CDN images. A page script now captures the real right-click target (`img`/`video`/background), and the menu uses a deferral to merge that in before showing. Lens is always offered for images.
+- **Embedded YouTube ads on Discord (and similar) are blocked again.** Whitelisting the top-level site (Discord) used to skip *all* network ad blocking, so `youtube.com` / `youtube-nocookie.com` iframe ad requests sailed through. Network blocking now still cancels known ad hosts on whitelisted pages (first-party traffic stays allowed). YouTube main-world strip + DOM scrubber also run in iframes, and `youtube-nocookie.com` is included in the hostname guard.
+
+---
+
 ## 0.8.4 — 2026-09-03
 
 Installer: `Ceprkac-0.8.4-Setup.exe`

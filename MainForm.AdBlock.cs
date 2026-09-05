@@ -229,14 +229,6 @@ namespace Ceprkac
 
         private async Task SetupAdBlocker(CoreWebView2 core)
         {
-            // Track whether the current page is whitelisted — avoids per-request URI parsing
-            bool pageIsWhitelisted = false;
-            core.SourceChanged += (_, _) =>
-            {
-                try { pageIsWhitelisted = IsAdBlockWhitelisted(new Uri(core.Source ?? "").Host.ToLower()); }
-                catch { pageIsWhitelisted = false; }
-            };
-
             // Register filters for resource types that serve ads — NOT All, which would
             // intercept upload streams and add IPC overhead on every data chunk
             var adResourceTypes = new[]
@@ -254,12 +246,9 @@ namespace Ceprkac
             {
                 try
                 {
-                    // Fast path: skip all checks when on a whitelisted page (GitHub, Discord, etc.)
-                    if (pageIsWhitelisted) return;
-
                     var uri = new Uri(args.Request.Uri);
                     var host = uri.Host.ToLower();
-                    // Skip whitelisted request hosts
+                    // Skip whitelisted *request* hosts (Discord CDN, Google accounts, etc.)
                     if (IsAdBlockWhitelisted(host)) return;
                     // Same-site (first-party) requests are never blocked
                     try
@@ -268,6 +257,11 @@ namespace Ceprkac
                         if (SameSite(host, pageHost)) return;
                     }
                     catch { }
+
+                    // Do NOT skip blocking just because the *top-level* page is whitelisted
+                    // (Discord, etc.). Embedded YouTube iframes still need ad requests cancelled.
+                    // First-party SameSite + request-host whitelist above protect the host site.
+
                     // Check if the host or any parent domain is in the block list
                     var checkHost = host;
                     while (checkHost.Contains('.'))
@@ -332,10 +326,48 @@ namespace Ceprkac
                 string cdpParams = "{\"source\":\"" + escapedJs + "\"}";
                 await core.CallDevToolsProtocolMethodAsync("Page.addScriptToEvaluateOnNewDocument", cdpParams);
             }
-            catch
+            catch { }
+
+            // Always also register via AddScriptToExecuteOnDocumentCreated. That API runs in
+            // iframes (Discord/Twitter embeds use youtube.com / youtube-nocookie.com iframes).
+            // CDP Page.addScriptToEvaluateOnNewDocument alone has been unreliable for child frames.
+            try { _ = core.AddScriptToExecuteOnDocumentCreatedAsync(YouTubeMainWorldInjectorJs); } catch { }
+            // DOM scrubber / skip-ad clicker for embed players (runs in every youtube* frame).
+            try { _ = core.AddScriptToExecuteOnDocumentCreatedAsync(BuildYouTubeEmbedScrubberJs()); } catch { }
+
+            // When an iframe is created, scrub again after it finishes loading.
+            try
             {
-                try { _ = core.AddScriptToExecuteOnDocumentCreatedAsync(YouTubeMainWorldInjectorJs); } catch { }
+                core.FrameCreated += (_, args) =>
+                {
+                    try
+                    {
+                        var frame = args.Frame;
+                        void ScrubFrame()
+                        {
+                            try { _ = frame.ExecuteScriptAsync(BuildYouTubeEmbedScrubberJs()); }
+                            catch { }
+                        }
+                        // Older runtimes may lack frame NavigationCompleted — try a few delayed runs.
+                        ScrubFrame();
+                        _ = Task.Delay(800).ContinueWith(_ => ScrubFrame());
+                        _ = Task.Delay(2500).ContinueWith(_ => ScrubFrame());
+                    }
+                    catch { }
+                };
             }
+            catch { }
+        }
+
+        private static string BuildYouTubeEmbedScrubberJs()
+        {
+            // Inject the full DOM scrubber into youtube* frames via a <script> tag (main world).
+            return "(function(){var h=(location.hostname||'').toLowerCase();" +
+                   "if(h.indexOf('youtube')===-1)return;" +
+                   "if(window.__ceprkacYtScrub)return;window.__ceprkacYtScrub=true;" +
+                   "var s=document.createElement('script');" +
+                   "s.textContent=" + JsonSerializer.Serialize(YouTubeAdBlockerJs) + ";" +
+                   "(document.documentElement||document.head||document.body).appendChild(s);s.remove();})()";
         }
 
         private const string AdElementHiderJs = @"(function() {
@@ -545,7 +577,10 @@ namespace Ceprkac
                 "(function(){" +
                 // Strict YouTube-only guard — never run on auth/OAuth domains
                 "var h=location.hostname.toLowerCase();" +
-                "if(h!=='youtube.com'&&h!=='www.youtube.com'&&h!=='m.youtube.com'&&h!=='music.youtube.com'&&!h.endsWith('.youtube.com'))return;" +
+                // Include youtube-nocookie.com — Discord/Twitter/etc. embeds often use it.
+                "if(h!=='youtube.com'&&h!=='www.youtube.com'&&h!=='m.youtube.com'&&h!=='music.youtube.com'" +
+                "&&h!=='youtube-nocookie.com'&&h!=='www.youtube-nocookie.com'" +
+                "&&!h.endsWith('.youtube.com')&&!h.endsWith('.youtube-nocookie.com'))return;" +
                 // Extra safety: bail on any auth/OAuth page that might be in a YouTube subdomain
                 "if(/accounts\\.google|login\\.microsoft|appleid\\.apple|auth0\\.com|clerk\\.|oauth/.test(h))return;" +
                 "if(window.__ceprkacYtMain)return;window.__ceprkacYtMain=true;" +
@@ -608,7 +643,8 @@ namespace Ceprkac
         private static string BuildYouTubeInjector()
         {
             string escaped = YouTubeMainWorldCode.Replace("\\", "\\\\").Replace("'", "\\'");
-            return "(function(){if(location.hostname.indexOf('youtube')===-1)return;" +
+            // indexOf('youtube') also matches youtube-nocookie.com embeds.
+            return "(function(){if(location.hostname.toLowerCase().indexOf('youtube')===-1)return;" +
                    "var sc=document.createElement('script');" +
                    "sc.textContent='" + escaped + "';" +
                    "(document.head||document.documentElement).appendChild(sc);sc.remove();})()";

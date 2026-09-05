@@ -1063,6 +1063,7 @@ namespace Ceprkac
                     };
                     _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
                     _ = core.AddScriptToExecuteOnDocumentCreatedAsync(AutofillAssistJs);
+                    _ = core.AddScriptToExecuteOnDocumentCreatedAsync(ContextCaptureJs);
 
                     // Block navigations to ad domains — cancel and auto-close empty tabs
                     core.NavigationStarting += (_, navArgs) =>
@@ -1293,6 +1294,7 @@ namespace Ceprkac
                 await SetupAdBlocker(core);
                 _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
                 _ = core.AddScriptToExecuteOnDocumentCreatedAsync(AutofillAssistJs);
+                _ = core.AddScriptToExecuteOnDocumentCreatedAsync(ContextCaptureJs);
             }
             SwitchToTab(insertIndex);
             return webView;
