@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.8.7 — 2026-09-05
+
+Installer: `Ceprkac-0.8.7-Setup.exe`
+
+### New-tab address bar + password picker fixes
+
+- **Address bar is empty and ready when you open a new tab.** Previously the home page URL was written back every time WebView2 grabbed OS focus during initialisation (which it does several times asynchronously). The fix: `tab.Url` is cleared at new-tab creation so `SyncAddressBarFromTab` has nothing to write back, `addressBox.LostFocus` skips its reset while the new-tab guard is active, and a 600 ms focus-assertion timer keeps the address box focused until the user starts typing or clicks the page.
+- **First keystroke is never eaten.** Typing `cake` searches for `cake`, not `ake`.
+- **Selecting a saved password no longer crashes.** `ContextMenuStrip.Dispose()` was called synchronously inside the `Closed` handler. WinForms' internal `ModalMenuFilter` still holds a reference to the open menu and calls `set_Visible` on the next message-pump tick — hitting the disposed object. All `Dispose()` calls are now deferred via `BeginInvoke` so the pump finishes first.
+- **Accidentally closing the credential picker no longer suppresses it permanently.** Closing without picking (click-away) now uses a 20-second cooldown instead of a session-wide dismiss. Only clicking **Type password manually…** permanently suppresses the picker for that site.
+- **Autofill errors shown in status bar** instead of being silently swallowed.
+
+---
+
+## 0.8.6 — 2026-09-05
+
+Installer: `Ceprkac-0.8.6-Setup.exe`
+
+### Native WebView2 features
+
+- **Find-in-page uses WebView2's native Ctrl+F bar** (identical to Chrome's). The custom WinForms find bar has been removed.
+- **Passkeys re-enabled.** The script that blocked `navigator.credentials.get/create` for `publicKey` has been removed — passwordless login works on Google, Microsoft, GitHub, etc.
+- **Permission dialogs use WebView2's native UI** for all permission types (camera, microphone, geolocation, etc.) instead of a plain WinForms `MessageBox`.
+- **`--disable-sync` removed** from the WebView2 environment options — this was accidentally disabling the browser's built-in autofill and password manager.
+- **`IsGeneralAutofillEnabled`, `IsPasswordAutosaveEnabled`, `AreBrowserAcceleratorKeysEnabled`, `IsStatusBarEnabled`** explicitly set `true` on every tab so intent is clear and the settings survive future env-option changes.
+- **Downloads use WebView2's native download shelf** (Chrome-style bar at the bottom). The blocking `SaveFileDialog` on every download has been removed. The custom downloads badge and history menu in the toolbar still track progress.
+- **New windows and popups open as full Ceprkac tabs** instead of bare `WebView2` forms — ad blocker, autofill, nav bar, and downloads menu all active.
+
+---
+
 ## 0.8.5 — 2026-09-04
 
 Installer: `Ceprkac-0.8.5-Setup.exe`

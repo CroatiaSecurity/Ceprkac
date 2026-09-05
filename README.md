@@ -2,24 +2,25 @@
 
 A Chrome-inspired tabbed browser for **Windows x64**, built with C# WinForms and **WebView2**. Same UI and features as [GBrowser](https://github.com/CroatiaSecurity/GBrowser), with Edge codecs so **H.264 / AAC** actually play (Discord embeds, typical HTML5 players).
 
-[![version](https://img.shields.io/badge/version-0.8.5-blue?style=flat-square)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.8.7-blue?style=flat-square)](CHANGELOG.md)
 [![.NET](https://img.shields.io/badge/.NET-Framework%204.8-512BD4?style=flat-square)](#requirements)
 [![engine](https://img.shields.io/badge/engine-WebView2%20(Chromium)-orange?style=flat-square)](#requirements)
 
-**Download:** [Ceprkac 0.8.5 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
+**Download:** [Ceprkac 0.8.7 Setup](https://github.com/CroatiaSecurity/Ceprkac/releases/latest) · **History:** [CHANGELOG](CHANGELOG.md)
 
 ---
 
 ## Features
 
-- Chrome-like tabs, dark UI, nested bookmarks, history, find-in-page, zoom
-- Omnibox search (Google, Bing, DuckDuckGo, Yahoo, Brave, Startpage) — first keystroke kept; live URL while browsing
+- Chrome-like tabs, dark UI, nested bookmarks, history, zoom
+- Omnibox search (Google, Bing, DuckDuckGo, Yahoo, Brave, Startpage) — new tab opens empty and focused, first keystroke kept; live URL while browsing
 - Right-click image → Google Lens / reverse-image search; video/media search; copy/open address
-- Downloads with Save As; passwords (DPAPI) with auto-fill, focus offers, save prompt, Manage Passwords
-- Saved payment methods and addresses (DPAPI) with checkout auto-fill
-- Network + DOM ad blocking (`blocklist.txt`); passkeys dismissed
+- Downloads via WebView2 native shelf; custom downloads badge + history in toolbar; blob/data URI save-as with cookie forwarding
+- Passwords (DPAPI) with auto-fill, credential picker, save prompt, Manage Passwords; payment methods and addresses (DPAPI) with checkout auto-fill
+- Network + DOM ad blocking (`blocklist.txt`); YouTube embed ads blocked via fetch interceptor in iframes
+- Native WebView2 Ctrl+F find bar, permission dialogs, passkeys, and accelerator keys
 - Hover link URL in the status bar; duplicate tab (`Ctrl+Shift+K`)
-- Injected-module cleaner (v0.7.1, all module extensions in v0.7.9): **identity unload** on LDR load (queued, not under loader lock) and on WebView2 children — keep trees + bundled names + WinVerifyTrust; foreign/Temp/sideload plants `FreeLibrary` immediately. Covers every loadable module extension (`.dll`, `.winmd`, `.ocx`, `.node`, …), not just `.dll`
+- Injected-module cleaner (identity unload on LDR load, all module extensions, WebView2 children)
 - WebView2 Evergreen Runtime auto-installed if missing
 - Optional **default browser**: http/https + HTML files; links open in the existing window
 
@@ -43,7 +44,7 @@ dotnet run --project Ceprkac.csproj
 build.bat
 ```
 
-Output: `releases\0.8.5\Ceprkac-0.8.5-Setup.exe`
+Output: `releases\0.8.7\Ceprkac-0.8.7-Setup.exe`
 
 ## Default browser
 
