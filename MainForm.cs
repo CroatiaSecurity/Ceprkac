@@ -863,25 +863,11 @@ namespace Ceprkac
         private void FocusAddressBar(bool selectAll = true)
         {
             if (addressBox.IsDisposed) return;
-            addressUserEditing = false;
+            // Do NOT reset addressUserEditing here — callers that want to clear
+            // it do so themselves. Resetting it here lets SyncAddressBarFromTab
+            // overwrite the box while focus events are still settling.
             addressBox.Focus();
-            if (selectAll)
-            {
-                // Defer SelectAll to after the message pump so WinForms focus
-                // events don't clobber the selection before the first keypress.
-                // Without this the first character typed on a new tab gets eaten
-                // because the GotFocus → FocusAddressBar chain fires twice and
-                // the second call resets the selection start.
-                BeginInvoke(new Action(() =>
-                {
-                    try
-                    {
-                        if (!addressBox.IsDisposed && addressBox.Focused)
-                            addressBox.SelectAll();
-                    }
-                    catch { }
-                }));
-            }
+            if (selectAll) addressBox.SelectAll();
             else
             {
                 addressBox.SelectionLength = 0;
@@ -968,20 +954,18 @@ namespace Ceprkac
             _ = webView.Handle;
             webView.GotFocus += (_, _) =>
             {
-                // Only for a freshly opened blank tab: pull focus to the omnibox once,
-                // then release so the user can click into the page normally afterwards.
-                if (!tab.FocusOmnibox) return;
+                // If the user clicks into the page on a new tab, clear the
+                // FocusOmnibox flag so we stop redirecting focus.
                 tab.FocusOmnibox = false;
-                try { FocusAddressBar(selectAll: true); } catch { }
             };
+
+            // Set editing flag BEFORE SwitchToTab so SyncAddressBarFromTab
+            // skips overwriting the address bar with the home URL.
+            if (focusOmnibox) addressUserEditing = true;
 
             SwitchToTab(insertIndex);
             if (focusOmnibox)
             {
-                // Clear to empty and select-all immediately. Setting addressUserEditing=true
-                // first prevents SyncAddressBarFromTab (called by SwitchToTab and SourceChanged)
-                // from overwriting our empty box before the user starts typing.
-                addressUserEditing = true;
                 addressBox.AutoCompleteMode = AutoCompleteMode.None;
                 addressBox.Text = "";
                 addressCommittedUrl = "";
