@@ -72,10 +72,7 @@ namespace Ceprkac
         private Font? _addressFont;
         private Font? _bookmarkFont;
         private Font? _statusFont;
-        private Font? _findFont;
         private readonly Panel webViewPanel;
-        private readonly Panel findBar;
-        private readonly TextBox findInput;
         private readonly ToolStripStatusLabel statusLabel;
         private readonly StatusStrip statusStrip;
 
@@ -302,7 +299,7 @@ namespace Ceprkac
             menuStrip.Items.Add(new ToolStripMenuItem("Duplicate Tab", null, (_, _) => DuplicateActiveTab()) { ShortcutKeyDisplayString = "Ctrl+Shift+K", ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripMenuItem("Reopen Closed Tab", null, (_, _) => RestoreClosedTab()) { ShortcutKeyDisplayString = "Ctrl+Shift+T", ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripSeparator());
-            menuStrip.Items.Add(new ToolStripMenuItem("Find in Page...", null, (_, _) => ToggleFindBar()) { ShortcutKeyDisplayString = "Ctrl+F", ForeColor = Color.White, BackColor = Theme.ActiveTab });
+            menuStrip.Items.Add(new ToolStripMenuItem("Find in Page...", null, (_, _) => ActiveTab?.WebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('find')")) { ShortcutKeyDisplayString = "Ctrl+F", ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripMenuItem("Zoom In", null, (_, _) => ZoomBy(0.1)) { ShortcutKeyDisplayString = "Ctrl+Plus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripMenuItem("Zoom Out", null, (_, _) => ZoomBy(-0.1)) { ShortcutKeyDisplayString = "Ctrl+Minus", ForeColor = Color.White, BackColor = Theme.ActiveTab });
             menuStrip.Items.Add(new ToolStripMenuItem("Reset Zoom", null, (_, _) => ZoomReset()) { ShortcutKeyDisplayString = "Ctrl+0", ForeColor = Color.White, BackColor = Theme.ActiveTab });
@@ -374,16 +371,6 @@ namespace Ceprkac
                 LayoutStyle = ToolStripLayoutStyle.HorizontalStackWithOverflow,
             };
 
-            findBar = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = Theme.Toolbar, Visible = false };
-            findInput = new TextBox { Left = 8, Top = 4, Width = 280, BackColor = Theme.AddressBox, ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
-            findInput.KeyDown += FindInput_KeyDown;
-            var findNext = new Button { Text = "Next", Left = 296, Top = 3, Width = 60, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.ActiveTab };
-            var findPrev = new Button { Text = "Prev", Left = 360, Top = 3, Width = 60, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.ActiveTab };
-            var findClose = new Button { Text = "×", Left = 424, Top = 3, Width = 32, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Theme.ActiveTab };
-            findNext.Click += (_, _) => FindInPage(false);
-            findPrev.Click += (_, _) => FindInPage(true);
-            findClose.Click += (_, _) => { findBar.Visible = false; };
-            findBar.Controls.AddRange(new Control[] { findInput, findNext, findPrev, findClose });
 
             // WebView panel
             webViewPanel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.ActiveTab };
@@ -395,7 +382,6 @@ namespace Ceprkac
 
             // Layout (reverse dock order)
             Controls.Add(webViewPanel);
-            Controls.Add(findBar);
             Controls.Add(bookmarksBar);
             Controls.Add(navPanel);
             Controls.Add(tabStrip);
@@ -446,11 +432,9 @@ namespace Ceprkac
             else if (e.Control && e.KeyCode == Keys.T) { AddNewTab(homePageUrl); e.Handled = true; }
             else if (e.Control && e.KeyCode == Keys.W) { if (tabStrip.SelectedIndex >= 0) CloseTab(tabStrip.SelectedIndex); e.Handled = true; }
             else if (e.Control && e.KeyCode == Keys.L) { FocusAddressBar(selectAll: true); e.Handled = true; }
-            else if (e.Control && e.KeyCode == Keys.F) { ToggleFindBar(); e.Handled = true; }
             else if (e.Control && (e.KeyCode == Keys.Oemplus || e.KeyCode == Keys.Add)) { ZoomBy(0.1); e.Handled = true; }
             else if (e.Control && (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)) { ZoomBy(-0.1); e.Handled = true; }
             else if (e.Control && (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0)) { ZoomReset(); e.Handled = true; }
-            else if (e.KeyCode == Keys.Escape && findBar.Visible) { findBar.Visible = false; e.Handled = true; }
             else if (e.KeyCode == Keys.Escape && ActiveTab?.FocusOmnibox == true)
             {
                 ActiveTab.FocusOmnibox = false;
@@ -499,7 +483,7 @@ namespace Ceprkac
                 try
                 {
                     var envOpts = new CoreWebView2EnvironmentOptions(
-                        "--no-first-run --disable-sync --disable-background-networking --disable-features=msSmartScreenProtection");
+                        "--no-first-run --disable-background-networking --disable-features=msSmartScreenProtection");
                     sharedEnvironment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, envOpts);
                 }
                 catch (Exception createEx)
@@ -793,13 +777,11 @@ namespace Ceprkac
             var oldAddr = _addressFont;
             var oldBm = _bookmarkFont;
             var oldSt = _statusFont;
-            var oldFind = _findFont;
             _navFont = UiPx(16f, _chromeDpiScale);
             _navFontLg = UiPx(18f, _chromeDpiScale);
             _addressFont = UiPx(14f, _chromeDpiScale);
             _bookmarkFont = UiPx(12f, _chromeDpiScale);
             _statusFont = UiPx(11f, _chromeDpiScale);
-            _findFont = UiPx(12f, _chromeDpiScale);
 
             foreach (var b in new[] { backBtn, fwdBtn, goBtn, bookmarkBtn, downloadsBtn })
             {
@@ -827,24 +809,6 @@ namespace Ceprkac
             statusStrip.Height = Dip(22);
             statusLabel.Font = _statusFont;
 
-            findBar.Height = Dip(32);
-            foreach (Control c in findBar.Controls)
-            {
-                c.Top = Dip(3);
-                c.Height = Dip(24);
-                c.Font = _findFont;
-            }
-            if (findBar.Controls.Count >= 4)
-            {
-                findBar.Controls[0].Left = Dip(8);
-                findBar.Controls[0].Width = Dip(280);
-                findBar.Controls[1].Left = Dip(296);
-                findBar.Controls[1].Width = Dip(60);
-                findBar.Controls[2].Left = Dip(362);
-                findBar.Controls[2].Width = Dip(60);
-                findBar.Controls[3].Left = Dip(428);
-                findBar.Controls[3].Width = Dip(32);
-            }
             navLayout.PerformLayout();
             Invalidate(true);
             DisposeFont(oldNav);
@@ -852,7 +816,6 @@ namespace Ceprkac
             DisposeFont(oldAddr);
             DisposeFont(oldBm);
             DisposeFont(oldSt);
-            DisposeFont(oldFind);
         }
 
         private static void DisposeFont(Font? f)
@@ -900,7 +863,23 @@ namespace Ceprkac
             if (addressBox.IsDisposed) return;
             addressUserEditing = false;
             addressBox.Focus();
-            if (selectAll) addressBox.SelectAll();
+            if (selectAll)
+            {
+                // Defer SelectAll to after the message pump so WinForms focus
+                // events don't clobber the selection before the first keypress.
+                // Without this the first character typed on a new tab gets eaten
+                // because the GotFocus → FocusAddressBar chain fires twice and
+                // the second call resets the selection start.
+                BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (!addressBox.IsDisposed && addressBox.Focused)
+                            addressBox.SelectAll();
+                    }
+                    catch { }
+                }));
+            }
             else
             {
                 addressBox.SelectionLength = 0;
@@ -995,7 +974,15 @@ namespace Ceprkac
             };
 
             SwitchToTab(insertIndex);
-            if (focusOmnibox) FocusAddressBar(selectAll: true);
+            if (focusOmnibox)
+            {
+                // Clear the address bar immediately so the user sees an empty box
+                // ready to type into — not the home URL they're about to replace.
+                // The SelectAll inside FocusAddressBar is deferred via BeginInvoke
+                // so the first keystroke is never eaten by a focus-event race.
+                SetAddressText("");
+                FocusAddressBar(selectAll: true);
+            }
 
             try
             {
@@ -1003,6 +990,13 @@ namespace Ceprkac
                 var core = webView.CoreWebView2;
                 if (core != null)
                 {
+                    // Use WebView2's native autofill, password save, accelerator keys
+                    // and status bar — explicit so the intent is clear and --disable-sync
+                    // removal doesn't silently change behaviour.
+                    core.Settings.IsGeneralAutofillEnabled = true;
+                    core.Settings.IsPasswordAutosaveEnabled = true;
+                    core.Settings.AreBrowserAcceleratorKeysEnabled = true;
+                    core.Settings.IsStatusBarEnabled = true;
                     core.NavigationStarting += (_, _) => { tab.IsLoading = true; tab.LoadProgress = 10; if (ActiveTab == tab) statusLabel.Text = "Loading..."; tabStrip.Invalidate(); };
                     core.NavigationCompleted += (_, e) =>
                     {
@@ -1061,7 +1055,6 @@ namespace Ceprkac
                         }
                         catch { }
                     };
-                    _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
                     _ = core.AddScriptToExecuteOnDocumentCreatedAsync(AutofillAssistJs);
                     _ = core.AddScriptToExecuteOnDocumentCreatedAsync(ContextCaptureJs);
 
@@ -1263,6 +1256,10 @@ namespace Ceprkac
             var core = webView.CoreWebView2;
             if (core != null)
             {
+                core.Settings.IsGeneralAutofillEnabled = true;
+                core.Settings.IsPasswordAutosaveEnabled = true;
+                core.Settings.AreBrowserAcceleratorKeysEnabled = true;
+                core.Settings.IsStatusBarEnabled = true;
                 core.NavigationStarting += (_, _) => { tab.IsLoading = true; tabStrip.Invalidate(); };
                 core.NavigationCompleted += (_, e) =>
                 {
@@ -1292,7 +1289,6 @@ namespace Ceprkac
                 // this method returns. Registering the CDP script first is what removes the
                 // "ads until refresh" symptom on that path.
                 await SetupAdBlocker(core);
-                _ = core.AddScriptToExecuteOnDocumentCreatedAsync(DisablePasskeyJs);
                 _ = core.AddScriptToExecuteOnDocumentCreatedAsync(AutofillAssistJs);
                 _ = core.AddScriptToExecuteOnDocumentCreatedAsync(ContextCaptureJs);
             }
@@ -1375,27 +1371,6 @@ namespace Ceprkac
             tab.ZoomFactor = 1.0;
             try { tab.WebView.ZoomFactor = 1.0; } catch { }
             statusLabel.Text = "Zoom: 100%";
-        }
-
-        private void ToggleFindBar()
-        {
-            findBar.Visible = !findBar.Visible;
-            if (findBar.Visible) { findInput.Focus(); findInput.SelectAll(); }
-        }
-
-        private void FindInput_KeyDown(object? sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter) { FindInPage(e.Shift); e.Handled = true; }
-            else if (e.KeyCode == Keys.Escape) { findBar.Visible = false; e.Handled = true; }
-        }
-
-        private async void FindInPage(bool backward)
-        {
-            var core = ActiveTab?.WebView.CoreWebView2;
-            if (core == null) return;
-            string q = findInput.Text.Replace("\\", "\\\\").Replace("'", "\\'");
-            string js = $"window.find('{q}', false, {(backward ? "true" : "false")}, true, false, false, false);";
-            try { await core.ExecuteScriptAsync(js); } catch { }
         }
 
         private void NavigateTab(BrowserTab tab, string url)

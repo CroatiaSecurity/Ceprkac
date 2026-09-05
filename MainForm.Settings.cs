@@ -22,47 +22,12 @@ namespace Ceprkac
     {
         private void Core_PermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs e)
         {
-            var kind = e.PermissionKind;
-            if (kind == CoreWebView2PermissionKind.Camera || kind == CoreWebView2PermissionKind.Microphone)
-            {
-                string name = kind == CoreWebView2PermissionKind.Camera ? "camera" : "microphone";
-                var r = MessageBox.Show(this, $"Allow this site to use your {name}?", "Permission",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-                e.State = r == DialogResult.Yes
-                    ? CoreWebView2PermissionState.Allow
-                    : CoreWebView2PermissionState.Deny;
-                return;
-            }
+            // Let WebView2 show its own native permission prompt for all permission types
+            // (camera, microphone, geolocation, etc.). Setting Default defers to the
+            // browser's built-in dialog, which is richer and already themed by the OS.
             e.State = CoreWebView2PermissionState.Default;
         }
 
-        private const string DisablePasskeyJs = @"
-(function(){
-  if (window.__gNoPasskey) return;
-  window.__gNoPasskey = 1;
-  try {
-    if (window.PublicKeyCredential) {
-      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = function(){ return Promise.resolve(false); };
-      PublicKeyCredential.isConditionalMediationAvailable = function(){ return Promise.resolve(false); };
-    }
-  } catch(e) {}
-  try {
-    if (navigator.credentials) {
-      var origGet = navigator.credentials.get.bind(navigator.credentials);
-      var origCreate = navigator.credentials.create.bind(navigator.credentials);
-      navigator.credentials.get = function(opts){
-        if (opts && opts.publicKey)
-          return Promise.reject(new DOMException('NotAllowedError'));
-        return origGet(opts);
-      };
-      navigator.credentials.create = function(opts){
-        if (opts && opts.publicKey)
-          return Promise.reject(new DOMException('NotAllowedError'));
-        return origCreate(opts);
-      };
-    }
-  } catch(e) {}
-})();";
 
         private void RefreshAddressSuggest()
         {
