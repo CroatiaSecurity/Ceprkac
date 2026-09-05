@@ -277,7 +277,9 @@ namespace Ceprkac
                 e.SuppressKeyPress = true;
                 addressUserEditing = false;
                 addressBox.AutoCompleteMode = AutoCompleteMode.None;
-                NavigateCurrentTab(addressBox.Text);
+                var navText = addressBox.Text;
+                try { File.AppendAllText(Path.Combine(appDataFolder, "addrbar.log"), $"[{DateTime.Now:HH:mm:ss.fff}] ENTER pressed, addressBox.Text=\"{navText}\"\n"); } catch { }
+                NavigateCurrentTab(navText);
                 var t = ActiveTab;
                 if (t != null) t.FocusOmnibox = false;
             };
@@ -479,6 +481,12 @@ namespace Ceprkac
                 LoadWindowState();
                 RefreshBookmarksBar();
                 RefreshAddressSuggest();
+                // Log suggest list contents for debugging
+                try {
+                    var suspicious = addressSuggest.Cast<string>().Where(s => s.Contains("blank", StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (suspicious.Any())
+                        File.AppendAllText(Path.Combine(appDataFolder, "addrbar.log"), $"[STARTUP] Suspicious suggest entries: {string.Join(", ", suspicious)}\n");
+                } catch { }
 
                 // Load or download ad blocklist
                 await LoadOrUpdateBlocklistAsync();
