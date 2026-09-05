@@ -111,6 +111,9 @@ namespace Ceprkac
         // Re-allows after 20 seconds so it can re-appear on next autofill trigger.
         private readonly Dictionary<string, DateTime> recentlyClosedCredentialHosts = new(StringComparer.OrdinalIgnoreCase);
         private ContextMenuStrip? credentialPickerMenu;
+        // Timestamp of the last new-tab open — LostFocus is suppressed for 800ms
+        // to prevent the GotFocus/LostFocus race from killing addressUserEditing.
+        private DateTime _newTabOpenedAt = DateTime.MinValue;
 
         private BrowserTab? ActiveTab => tabStrip.SelectedIndex >= 0 && tabStrip.SelectedIndex < tabStrip.Tabs.Count
             ? tabStrip.Tabs[tabStrip.SelectedIndex] : null;
@@ -245,9 +248,10 @@ namespace Ceprkac
             };
             addressBox.LostFocus += (_, _) =>
             {
-                // Don't reset during new-tab focus assertion — the timer is
-                // actively fighting WebView2 for focus and we must not undo it.
                 if (ActiveTab?.FocusOmnibox == true) return;
+                // Grace period: suppress for 800ms after a new tab opens so the
+                // GotFocus/LostFocus race can't kill addressUserEditing.
+                if ((DateTime.Now - _newTabOpenedAt).TotalMilliseconds < 800) return;
                 addressUserEditing = false;
                 try
                 {
@@ -964,7 +968,7 @@ namespace Ceprkac
                 TabStop = false,
                 DefaultBackgroundColor = Theme.ActiveTab,
             };
-            var tab = new BrowserTab { Url = url, WebView = webView, FocusOmnibox = focusOmnibox };
+            var tab = new BrowserTab { Url = navUrl, WebView = webView, FocusOmnibox = focusOmnibox };
 
             int insertIndex = insertAfter.HasValue ? insertAfter.Value + 1
                 : tabStrip.SelectedIndex >= 0 ? tabStrip.SelectedIndex + 1
@@ -990,6 +994,7 @@ namespace Ceprkac
             // skips overwriting the address bar with the home URL.
             // tab.Url stays as-is (homePageUrl) so NavigateTab fires correctly.
             if (focusOmnibox) addressUserEditing = true;
+            if (focusOmnibox) _newTabOpenedAt = DateTime.Now;
 
             SwitchToTab(insertIndex);
             if (focusOmnibox)
@@ -1407,9 +1412,12 @@ namespace Ceprkac
             addressUserEditing = false;
             if (tab.WebView.CoreWebView2 != null)
                 tab.WebView.CoreWebView2.Navigate(uri.ToString());
-            if (ActiveTab == tab)
+            // Don't write about:blank to the address bar — SyncAddressBarFromTab
+            // maps it to "" so the bar stays clean for the user to type into.
+            if (ActiveTab == tab && uri.ToString() != "about:blank")
                 SetAddressText(uri.ToString(), force: true);
-            AddToHistory(uri.ToString());
+            if (uri.ToString() != "about:blank")
+                AddToHistory(uri.ToString());
         }
 
         private void NavigateCurrentTab(string url)
