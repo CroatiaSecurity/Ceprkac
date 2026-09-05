@@ -199,7 +199,10 @@ namespace Ceprkac
             if (!File.Exists(historyFile)) return;
             history.Clear();
             var lines = File.ReadAllLines(historyFile)
-                .Where(l => !string.IsNullOrWhiteSpace(l) && l != "about:blank")
+                .Where(l => !string.IsNullOrWhiteSpace(l)
+                         && l != "about:blank"
+                         && !l.Contains("about%3Ablank", StringComparison.OrdinalIgnoreCase)
+                         && !l.Contains("about:blank", StringComparison.OrdinalIgnoreCase))
                 .Distinct().ToList();
             history.AddRange(lines.Count <= 100 ? lines : lines.GetRange(lines.Count - 100, 100));
         }
@@ -210,6 +213,8 @@ namespace Ceprkac
         {
             if (string.IsNullOrWhiteSpace(url)) return;
             if (url == "about:blank") return;
+            if (url.Contains("about%3Ablank", StringComparison.OrdinalIgnoreCase)) return;
+            if (url.Contains("about:blank", StringComparison.OrdinalIgnoreCase)) return;
             history.RemoveAll(item => string.Equals(item, url, StringComparison.OrdinalIgnoreCase));
             history.Add(url);
             if (history.Count > 100) history.RemoveRange(0, history.Count - 100);
