@@ -975,16 +975,15 @@ namespace Ceprkac
             _ = webView.Handle;
             webView.GotFocus += (_, _) =>
             {
-                // User clicked into the page — clear the focus guard so the
-                // timer stops and LostFocus works normally again.
-                // If this is a new tab and they haven't typed anything yet,
-                // navigate to the home page now.
-                if (tab.FocusOmnibox)
-                {
-                    tab.FocusOmnibox = false;
-                    if (addressBox.Text.Length == 0 && !string.IsNullOrEmpty(homePageUrl))
-                        NavigateTab(tab, homePageUrl);
-                }
+                // Clear the focus guard when WebView gets focus.
+                tab.FocusOmnibox = false;
+            };
+            webView.MouseDown += (_, _) =>
+            {
+                // User explicitly clicked the page on a new empty tab — load home page.
+                if (addressBox.Text.Length == 0 && !string.IsNullOrEmpty(homePageUrl)
+                    && (tab.WebView.CoreWebView2?.Source ?? "") == "about:blank")
+                    NavigateTab(tab, homePageUrl);
             };
 
             // Set editing flag BEFORE SwitchToTab so SyncAddressBarFromTab
