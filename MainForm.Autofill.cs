@@ -817,8 +817,11 @@ namespace Ceprkac
             {
                 if (credentialPickerMenu != null)
                 {
-                    try { credentialPickerMenu.Close(); credentialPickerMenu.Dispose(); } catch { }
+                    var old = credentialPickerMenu;
                     credentialPickerMenu = null;
+                    try { old.Close(); } catch { }
+                    // Defer dispose so ModalMenuFilter finishes with it first.
+                    BeginInvoke(new Action(() => { try { old.Dispose(); } catch { } }));
                 }
 
                 bool chose = false;
@@ -899,11 +902,14 @@ namespace Ceprkac
                 {
                     // Closed without picking — temporarily suppress so an accidental
                     // click-away doesn't permanently hide the picker for this session.
-                    // It will re-appear after 20 seconds.
                     if (!chose) TemporarilySuppressCredentialOffer(pageUrl);
                     if (ReferenceEquals(credentialPickerMenu, picker))
                         credentialPickerMenu = null;
-                    try { picker.Dispose(); } catch { }
+                    // Never Dispose() synchronously inside Closed — WinForms'
+                    // ModalMenuFilter still holds a reference and will call
+                    // set_Visible on the next message pump tick, throwing
+                    // ObjectDisposedException. Defer to let WinForms finish first.
+                    BeginInvoke(new Action(() => { try { picker.Dispose(); } catch { } }));
                 };
 
                 // Clamp to the working area so a tiny window still shows the menu on-screen.
