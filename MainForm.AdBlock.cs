@@ -314,28 +314,25 @@ namespace Ceprkac
         {
             try
             {
-                // The Page domain MUST be enabled before Page.addScriptToEvaluateOnNewDocument
-                // takes effect. Without Page.enable the registration is accepted but does not
-                // reliably bind to the NEXT document — so the first YouTube load (e.g. clicking
-                // a result from a search engine) ran page scripts before the stripper installed,
-                // and only a refresh — which happens after the domain has settled — blocked ads.
-                // Enabling Page first makes the registration apply to the very first document.
+                // Page domain must be enabled before addScriptToEvaluateOnNewDocument works.
                 try { await core.CallDevToolsProtocolMethodAsync("Page.enable", "{}"); } catch { }
 
                 string escapedJs = YouTubeMainWorldCode.Replace("\\", "\\\\").Replace("\"", "\\\"");
+                // includeCommandLineAPI false, worldName empty = main world, runs in all frames.
                 string cdpParams = "{\"source\":\"" + escapedJs + "\"}";
                 await core.CallDevToolsProtocolMethodAsync("Page.addScriptToEvaluateOnNewDocument", cdpParams);
             }
             catch { }
 
-            // Always also register via AddScriptToExecuteOnDocumentCreated. That API runs in
-            // iframes (Discord/Twitter embeds use youtube.com / youtube-nocookie.com iframes).
-            // CDP Page.addScriptToEvaluateOnNewDocument alone has been unreliable for child frames.
+            // AddScriptToExecuteOnDocumentCreated runs in iframes (isolated world).
+            // The injector wraps the main-world code in a <script> tag so it runs there too.
             try { _ = core.AddScriptToExecuteOnDocumentCreatedAsync(YouTubeMainWorldInjectorJs); } catch { }
-            // DOM scrubber / skip-ad clicker for embed players (runs in every youtube* frame).
+            // DOM scrubber / skip-ad clicker for embed players.
             try { _ = core.AddScriptToExecuteOnDocumentCreatedAsync(BuildYouTubeEmbedScrubberJs()); } catch { }
 
-            // When an iframe is created, scrub again after it finishes loading.
+            // When an iframe is created, inject into it immediately via CDP Runtime.evaluate
+            // (runs in the main world of that frame before any page script has a chance to fire)
+            // plus delayed scrub passes to catch dynamically-inserted ad elements.
             try
             {
                 core.FrameCreated += (_, args) =>
@@ -343,15 +340,20 @@ namespace Ceprkac
                     try
                     {
                         var frame = args.Frame;
-                        void ScrubFrame()
+
+                        // Immediate main-world injection via script-tag trick in isolated world.
+                        // This is the earliest we can touch the frame.
+                        void InjectFrame()
                         {
                             try { _ = frame.ExecuteScriptAsync(BuildYouTubeEmbedScrubberJs()); }
                             catch { }
                         }
-                        // Older runtimes may lack frame NavigationCompleted — try a few delayed runs.
-                        ScrubFrame();
-                        _ = Task.Delay(800).ContinueWith(_ => ScrubFrame());
-                        _ = Task.Delay(2500).ContinueWith(_ => ScrubFrame());
+
+                        InjectFrame();
+                        _ = Task.Delay(200).ContinueWith(_ => InjectFrame());
+                        _ = Task.Delay(600).ContinueWith(_ => InjectFrame());
+                        _ = Task.Delay(1500).ContinueWith(_ => InjectFrame());
+                        _ = Task.Delay(3000).ContinueWith(_ => InjectFrame());
                     }
                     catch { }
                 };
@@ -361,13 +363,57 @@ namespace Ceprkac
 
         private static string BuildYouTubeEmbedScrubberJs()
         {
-            // Inject the full DOM scrubber into youtube* frames via a <script> tag (main world).
-            return "(function(){var h=(location.hostname||'').toLowerCase();" +
-                   "if(h.indexOf('youtube')===-1)return;" +
-                   "if(window.__ceprkacYtScrub)return;window.__ceprkacYtScrub=true;" +
-                   "var s=document.createElement('script');" +
-                   "s.textContent=" + JsonSerializer.Serialize(YouTubeAdBlockerJs) + ";" +
-                   "(document.documentElement||document.head||document.body).appendChild(s);s.remove();})()";
+            // Injected into every youtube*/youtube-nocookie* iframe via a <script> tag
+            // (main world). Combines:
+            //  1. A fetch interceptor that strips adPlacements from /youtubei/v1/player
+            //     responses BEFORE the embed player JS reads them — stops pre-roll ads
+            //     at the data level rather than skipping them after they start.
+            //  2. The DOM scrubber + skip-ad clicker (YouTubeAdBlockerJs) as a fallback
+            //     for any ad elements that slip through.
+            const string fetchInterceptor =
+                "(function(){" +
+                "if(window.__ceprkacEmbedFetch)return;window.__ceprkacEmbedFetch=true;" +
+                "var adKeys=['adPlacements','adSlots','playerAds','adBreakHeartbeatParams'," +
+                "'ad3Module','adSafetyReason','adLoggingData','showAdSlots','adBreakParams'," +
+                "'adBreakStatus','adVideoId','adLayoutLoggingData','instreamAdPlayerOverlayRenderer'," +
+                "'adPlacementConfig','adVideoStitcherConfig'];" +
+                "function strip(o,d){if(!o||typeof o!=='object'||d>12)return;" +
+                "for(var i=0;i<adKeys.length;i++)if(o.hasOwnProperty(adKeys[i]))delete o[adKeys[i]];" +
+                "var k=Object.keys(o);for(var j=0;j<k.length;j++){" +
+                "var v=o[k[j]];" +
+                "if(Array.isArray(v)){for(var m=v.length-1;m>=0;m--){" +
+                "var it=v[m];if(it&&typeof it==='object'){" +
+                "var ik=Object.keys(it);var bad=false;" +
+                "for(var n=0;n<ik.length;n++){if(/^(ad|promoted|sponsor)/i.test(ik[n])){bad=true;break;}}" +
+                "if(bad)v.splice(m,1);else strip(it,d+1);}}}" +
+                "else if(v&&typeof v==='object')strip(v,d+1);}}" +
+                "var op=JSON.parse;JSON.parse=function(){var r=op.apply(this,arguments);" +
+                "try{if(r&&typeof r==='object')strip(r,0);}catch(e){}return r;};" +
+                "var oF=window.fetch;window.fetch=function(){var a=arguments;" +
+                "var url=typeof a[0]==='string'?a[0]:(a[0]&&a[0].url?a[0].url:'');" +
+                "if(!/youtubei\\/v1\\/(player|browse|next)/.test(url))return oF.apply(this,a);" +
+                "return oF.apply(this,a).then(function(resp){" +
+                "if(!resp||!resp.ok)return resp;" +
+                "return resp.clone().text().then(function(txt){" +
+                "try{var data=op.call(JSON,txt);strip(data,0);" +
+                "return new Response(JSON.stringify(data),{status:resp.status,statusText:resp.statusText,headers:resp.headers});}" +
+                "catch(e){return resp;}});});};" +
+                "})();";
+
+            string domScrubber = JsonSerializer.Serialize(YouTubeAdBlockerJs);
+
+            return
+                "(function(){" +
+                "var h=(location.hostname||'').toLowerCase();" +
+                "if(h.indexOf('youtube')===-1)return;" +
+                // Fetch interceptor — installs unconditionally so every frame load gets it.
+                fetchInterceptor +
+                // DOM scrubber injected as a <script> tag into the main world.
+                "if(window.__ceprkacYtScrub)return;window.__ceprkacYtScrub=true;" +
+                "var s=document.createElement('script');" +
+                "s.textContent=" + domScrubber + ";" +
+                "(document.documentElement||document.head||document.body).appendChild(s);s.remove();" +
+                "})()";
         }
 
         private const string AdElementHiderJs = @"(function() {

@@ -976,12 +976,15 @@ namespace Ceprkac
             SwitchToTab(insertIndex);
             if (focusOmnibox)
             {
-                // Clear the address bar immediately so the user sees an empty box
-                // ready to type into — not the home URL they're about to replace.
-                // The SelectAll inside FocusAddressBar is deferred via BeginInvoke
-                // so the first keystroke is never eaten by a focus-event race.
-                SetAddressText("");
-                FocusAddressBar(selectAll: true);
+                // Clear to empty and select-all immediately. Setting addressUserEditing=true
+                // first prevents SyncAddressBarFromTab (called by SwitchToTab and SourceChanged)
+                // from overwriting our empty box before the user starts typing.
+                addressUserEditing = true;
+                addressBox.AutoCompleteMode = AutoCompleteMode.None;
+                addressBox.Text = "";
+                addressCommittedUrl = "";
+                addressBox.Focus();
+                addressBox.SelectAll();
             }
 
             try
