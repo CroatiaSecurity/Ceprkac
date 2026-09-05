@@ -1420,6 +1420,15 @@ namespace Ceprkac
         private void NavigateTab(BrowserTab tab, string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return;
+            if (url == "about:blank")
+            {
+                // Navigate directly — don't treat as search query, don't update address bar.
+                tab.Url = "about:blank";
+                addressUserEditing = false;
+                if (tab.WebView.CoreWebView2 != null)
+                    tab.WebView.CoreWebView2.Navigate("about:blank");
+                return;
+            }
             // If it's not a URL, treat as search query
             if ((!url.Contains("://") && !url.Contains(".")) || (url.Contains(" ") && !url.Contains("://")))
             {
