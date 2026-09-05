@@ -833,9 +833,8 @@ namespace Ceprkac
         {
             url = url ?? "";
             addressCommittedUrl = url;
-            // Only skip when the user is mid-edit. Mere focus (omnibox select-all on a
-            // new tab, or a focus race during navigation) must still show the real URL.
-            if (!force && addressUserEditing) return;
+            // Never overwrite text the user is actively editing.
+            if (addressUserEditing) return;
             if (addressBox.Text == url) return;
             addressBox.AutoCompleteMode = AutoCompleteMode.None;
             addressBox.Text = url;
@@ -995,7 +994,7 @@ namespace Ceprkac
                 focusTimer.Tick += (_, _) =>
                 {
                     ticks++;
-                    if (ticks > 12 || !tab.FocusOmnibox || addressBox.IsDisposed)
+                    if (ticks > 30 || !tab.FocusOmnibox || addressBox.IsDisposed)
                     {
                         tab.FocusOmnibox = false;
                         focusTimer.Stop();
