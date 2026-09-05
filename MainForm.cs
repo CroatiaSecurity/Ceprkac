@@ -950,6 +950,11 @@ namespace Ceprkac
         private async void AddNewTab(string url, int? insertAfter = null, bool focusOmnibox = true)
         {
             if (sharedEnvironment == null) return;
+            // When opening a tab for the user to search (focusOmnibox=true), navigate
+            // to about:blank instead of the home page. The WebView has nothing to render
+            // so it doesn't steal focus. home page loads if user clicks the page without
+            // typing, or if user presses Enter with empty bar in NavigateCurrentTab.
+            string navUrl = (focusOmnibox && url == homePageUrl) ? "about:blank" : url;
             var webView = new WebView2
             {
                 Dock = DockStyle.Fill,
@@ -968,9 +973,16 @@ namespace Ceprkac
             _ = webView.Handle;
             webView.GotFocus += (_, _) =>
             {
-                // If the user clicks into the page on a new tab, clear the
-                // FocusOmnibox flag so we stop redirecting focus.
-                tab.FocusOmnibox = false;
+                // User clicked into the page — clear the focus guard so the
+                // timer stops and LostFocus works normally again.
+                // If this is a new tab and they haven't typed anything yet,
+                // navigate to the home page now.
+                if (tab.FocusOmnibox)
+                {
+                    tab.FocusOmnibox = false;
+                    if (addressBox.Text.Length == 0 && !string.IsNullOrEmpty(homePageUrl))
+                        NavigateTab(tab, homePageUrl);
+                }
             };
 
             // Set editing flag BEFORE SwitchToTab so SyncAddressBarFromTab
@@ -986,28 +998,6 @@ namespace Ceprkac
                 addressCommittedUrl = "";
                 addressBox.Focus();
                 addressBox.SelectAll();
-
-                // WebView2 grabs OS focus during EnsureCoreWebView2Async.
-                // Use a timer to keep re-asserting address bar focus for 600ms.
-                var focusTimer = new System.Windows.Forms.Timer { Interval = 50 };
-                int ticks = 0;
-                focusTimer.Tick += (_, _) =>
-                {
-                    ticks++;
-                    if (ticks > 30 || !tab.FocusOmnibox || addressBox.IsDisposed)
-                    {
-                        tab.FocusOmnibox = false;
-                        focusTimer.Stop();
-                        focusTimer.Dispose();
-                        return;
-                    }
-                    if (!addressBox.Focused)
-                    {
-                        addressBox.Focus();
-                        addressBox.SelectAll();
-                    }
-                };
-                focusTimer.Start();
             }
 
             try
@@ -1136,7 +1126,7 @@ namespace Ceprkac
                     // main-world JSON stripper is registered before this tab navigates.
                     await SetupAdBlocker(core);
                 }
-                if (!string.IsNullOrWhiteSpace(tab.Url)) NavigateTab(tab, tab.Url);
+                if (!string.IsNullOrWhiteSpace(navUrl)) NavigateTab(tab, navUrl);
                 if (tab.FocusOmnibox) FocusAddressBar(selectAll: true);
             }
             catch (Exception ex)
@@ -1421,7 +1411,13 @@ namespace Ceprkac
             AddToHistory(uri.ToString());
         }
 
-        private void NavigateCurrentTab(string url) { if (ActiveTab != null) NavigateTab(ActiveTab, url); }
+        private void NavigateCurrentTab(string url)
+        {
+            if (ActiveTab == null) return;
+            // Empty bar on a new tab = go to home page
+            if (string.IsNullOrWhiteSpace(url)) NavigateTab(ActiveTab, homePageUrl);
+            else NavigateTab(ActiveTab, url);
+        }
 
         private void UpdateTabState(BrowserTab tab)
         {
