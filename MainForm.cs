@@ -222,6 +222,8 @@ namespace Ceprkac
             {
                 if (char.IsControl(e.KeyChar)) return;
                 addressUserEditing = true;
+                // User is typing — stop the focus-assertion timer
+                if (ActiveTab != null) ActiveTab.FocusOmnibox = false;
             };
             addressBox.TextChanged += (_, _) =>
             {
@@ -981,12 +983,32 @@ namespace Ceprkac
                 addressBox.AutoCompleteMode = AutoCompleteMode.None;
                 addressBox.Text = "";
                 addressCommittedUrl = "";
-                // Try to focus the address bar. Even if WebView2 steals focus
-                // back during initialisation, PreFilterMessage will redirect any
-                // printable keystroke to the address bar while addressUserEditing
-                // is true, so the first character is never lost.
                 addressBox.Focus();
                 addressBox.SelectAll();
+
+                // WebView2 grabs OS focus during EnsureCoreWebView2Async.
+                // Use a timer to keep re-asserting address bar focus for 600ms —
+                // long enough to outlast WebView2 init on any machine.
+                // The timer stops as soon as the user clicks the page (FocusOmnibox=false)
+                // or starts typing (addressUserEditing stays true but box has focus).
+                var focusTimer = new System.Windows.Forms.Timer { Interval = 50 };
+                int ticks = 0;
+                focusTimer.Tick += (_, _) =>
+                {
+                    ticks++;
+                    if (ticks > 12 || !tab.FocusOmnibox || addressBox.IsDisposed)
+                    {
+                        focusTimer.Stop();
+                        focusTimer.Dispose();
+                        return;
+                    }
+                    if (addressUserEditing && !addressBox.Focused)
+                    {
+                        addressBox.Focus();
+                        addressBox.SelectAll();
+                    }
+                };
+                focusTimer.Start();
             }
 
             try
