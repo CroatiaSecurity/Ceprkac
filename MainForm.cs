@@ -851,6 +851,8 @@ namespace Ceprkac
             try { url = tab.WebView.CoreWebView2?.Source ?? tab.Url ?? ""; }
             catch { url = tab.Url ?? ""; }
             if (!string.IsNullOrEmpty(url)) tab.Url = url;
+            // Don't overwrite an empty address bar that the user is about to type into.
+            if (string.IsNullOrEmpty(url) && addressUserEditing) return;
             if (ActiveTab != tab) return;
             SetAddressText(url, force: force);
         }
@@ -978,7 +980,11 @@ namespace Ceprkac
 
             // Set editing flag BEFORE SwitchToTab so SyncAddressBarFromTab
             // skips overwriting the address bar with the home URL.
-            if (focusOmnibox) addressUserEditing = true;
+            if (focusOmnibox)
+            {
+                addressUserEditing = true;
+                tab.Url = ""; // prevent SyncAddressBarFromTab from writing homePageUrl back
+            }
 
             SwitchToTab(insertIndex);
             if (focusOmnibox)
@@ -990,10 +996,7 @@ namespace Ceprkac
                 addressBox.SelectAll();
 
                 // WebView2 grabs OS focus during EnsureCoreWebView2Async.
-                // Use a timer to keep re-asserting address bar focus for 600ms —
-                // long enough to outlast WebView2 init on any machine.
-                // The timer stops as soon as the user clicks the page (FocusOmnibox=false)
-                // or starts typing (addressUserEditing stays true but box has focus).
+                // Use a timer to keep re-asserting address bar focus for 600ms.
                 var focusTimer = new System.Windows.Forms.Timer { Interval = 50 };
                 int ticks = 0;
                 focusTimer.Tick += (_, _) =>
@@ -1001,14 +1004,12 @@ namespace Ceprkac
                     ticks++;
                     if (ticks > 12 || !tab.FocusOmnibox || addressBox.IsDisposed)
                     {
-                        // Timer expired without user typing — clear flag so
-                        // LostFocus works normally if user clicks elsewhere.
                         tab.FocusOmnibox = false;
                         focusTimer.Stop();
                         focusTimer.Dispose();
                         return;
                     }
-                    if (addressUserEditing && !addressBox.Focused)
+                    if (!addressBox.Focused)
                     {
                         addressBox.Focus();
                         addressBox.SelectAll();
