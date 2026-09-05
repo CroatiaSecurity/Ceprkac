@@ -198,7 +198,9 @@ namespace Ceprkac
         {
             if (!File.Exists(historyFile)) return;
             history.Clear();
-            var lines = File.ReadAllLines(historyFile).Where(l => !string.IsNullOrWhiteSpace(l)).Distinct().ToList();
+            var lines = File.ReadAllLines(historyFile)
+                .Where(l => !string.IsNullOrWhiteSpace(l) && l != "about:blank")
+                .Distinct().ToList();
             history.AddRange(lines.Count <= 100 ? lines : lines.GetRange(lines.Count - 100, 100));
         }
 
@@ -207,6 +209,7 @@ namespace Ceprkac
         private void AddToHistory(string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return;
+            if (url == "about:blank") return;
             history.RemoveAll(item => string.Equals(item, url, StringComparison.OrdinalIgnoreCase));
             history.Add(url);
             if (history.Count > 100) history.RemoveRange(0, history.Count - 100);

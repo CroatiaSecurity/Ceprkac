@@ -840,6 +840,15 @@ namespace Ceprkac
             // Never overwrite text the user is actively editing.
             if (addressUserEditing) return;
             if (addressBox.Text == url) return;
+            // Lightweight persistent log — caller name only, no stack trace.
+            try
+            {
+                var caller = new System.Diagnostics.StackFrame(1, false).GetMethod()?.Name ?? "?";
+                File.AppendAllText(
+                    Path.Combine(appDataFolder, "addrbar.log"),
+                    $"[{DateTime.Now:HH:mm:ss.fff}] \"{url}\" ← {caller}\n");
+            }
+            catch { }
             addressBox.AutoCompleteMode = AutoCompleteMode.None;
             addressBox.Text = url;
             addressBox.SelectionStart = addressBox.Text.Length;
