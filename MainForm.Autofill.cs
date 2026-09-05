@@ -848,23 +848,34 @@ namespace Ceprkac
                     item.Click += async (_, _) =>
                     {
                         chose = true;
+                        // Capture CoreWebView2 BEFORE closing — picker.Close() fires the
+                        // Closed event synchronously which can trigger focus/navigation
+                        // events that dispose the CoreWebView2 before we get to use it.
+                        var core = tab.WebView?.IsDisposed == false
+                            ? tab.WebView.CoreWebView2 : null;
                         picker.Close();
-                        var core = tab.WebView.CoreWebView2;
-                        if (core == null) return;
+                        if (core == null)
+                        {
+                            try { Invoke(() => statusLabel.Text = "Could not fill — page not ready."); } catch { }
+                            return;
+                        }
                         try
                         {
                             if (passwordOnly)
                             {
                                 await FillPasswordOnly(core, c.Password);
-                                statusLabel.Text = $"Filled password for {c.Username}";
+                                try { Invoke(() => statusLabel.Text = $"Filled password for {c.Username}"); } catch { }
                             }
                             else
                             {
                                 await FillCredentials(core, c.Username, c.Password);
-                                statusLabel.Text = $"Filled credentials for {c.Username}";
+                                try { Invoke(() => statusLabel.Text = $"Filled credentials for {c.Username}"); } catch { }
                             }
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            try { Invoke(() => statusLabel.Text = $"Autofill error: {ex.Message}"); } catch { }
+                        }
                     };
                     picker.Items.Add(item);
                 }
@@ -886,8 +897,10 @@ namespace Ceprkac
 
                 picker.Closed += (_, _) =>
                 {
-                    // Closed without picking = leave the page alone for this URL.
-                    if (!chose) DismissCredentialOffer(pageUrl);
+                    // Closed without picking — temporarily suppress so an accidental
+                    // click-away doesn't permanently hide the picker for this session.
+                    // It will re-appear after 20 seconds.
+                    if (!chose) TemporarilySuppressCredentialOffer(pageUrl);
                     if (ReferenceEquals(credentialPickerMenu, picker))
                         credentialPickerMenu = null;
                     try { picker.Dispose(); } catch { }
@@ -919,22 +932,41 @@ namespace Ceprkac
         private bool IsCredentialOfferDismissed(string? pageUrl)
         {
             if (string.IsNullOrEmpty(pageUrl)) return false;
-            try
+            string host;
+            try { host = new Uri(pageUrl!).Host.ToLowerInvariant(); }
+            catch { host = pageUrl!; }
+
+            // Permanently dismissed — user clicked "Type password manually…"
+            if (dismissedCredentialHosts.Contains(host)) return true;
+
+            // Temporarily suppressed — user closed without picking (maybe by accident)
+            if (recentlyClosedCredentialHosts.TryGetValue(host, out var closedAt))
             {
-                var host = new Uri(pageUrl!).Host.ToLowerInvariant();
-                return dismissedCredentialHosts.Contains(host);
+                if ((DateTime.Now - closedAt).TotalSeconds < 20)
+                    return true;
+                recentlyClosedCredentialHosts.Remove(host);
             }
-            catch { return dismissedCredentialHosts.Contains(pageUrl!); }
+            return false;
         }
 
+        // Permanent dismiss — user explicitly chose "Type password manually…"
         private void DismissCredentialOffer(string? pageUrl)
         {
             if (string.IsNullOrEmpty(pageUrl)) return;
-            try
-            {
-                dismissedCredentialHosts.Add(new Uri(pageUrl!).Host.ToLowerInvariant());
-            }
-            catch { dismissedCredentialHosts.Add(pageUrl!); }
+            string host;
+            try { host = new Uri(pageUrl!).Host.ToLowerInvariant(); }
+            catch { host = pageUrl!; }
+            dismissedCredentialHosts.Add(host);
+        }
+
+        // Temporary suppress — user closed without picking (accident or changed mind)
+        private void TemporarilySuppressCredentialOffer(string? pageUrl)
+        {
+            if (string.IsNullOrEmpty(pageUrl)) return;
+            string host;
+            try { host = new Uri(pageUrl!).Host.ToLowerInvariant(); }
+            catch { host = pageUrl!; }
+            recentlyClosedCredentialHosts[host] = DateTime.Now;
         }
 
         // Save-password prompt only — do NOT re-offer on every field focus (that blocked typing).

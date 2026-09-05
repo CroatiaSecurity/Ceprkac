@@ -105,9 +105,11 @@ namespace Ceprkac
         private DateTime lastProcessRecover = DateTime.MinValue;
         private readonly List<string> pendingExternalUrls = new();
         private DateTime lastCredentialOfferUi = DateTime.MinValue;
-        // Hosts where the user dismissed the credential menu — do not keep popping offers
-        // so they can type a password manually.
+        // Permanently dismissed — user clicked "Type password manually…"
         private readonly HashSet<string> dismissedCredentialHosts = new(StringComparer.OrdinalIgnoreCase);
+        // Temporarily suppressed — user closed the picker without picking (maybe by accident).
+        // Re-allows after 20 seconds so it can re-appear on next autofill trigger.
+        private readonly Dictionary<string, DateTime> recentlyClosedCredentialHosts = new(StringComparer.OrdinalIgnoreCase);
         private ContextMenuStrip? credentialPickerMenu;
 
         private BrowserTab? ActiveTab => tabStrip.SelectedIndex >= 0 && tabStrip.SelectedIndex < tabStrip.Tabs.Count
