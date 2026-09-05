@@ -851,11 +851,23 @@ namespace Ceprkac
         }
 
         // The address bar is a normal WinForms TextBox and handles its own input.
-        // The old custom keystroke-redirection (WM_CHAR/WM_KEYDOWN → ApplyOmniboxChar)
-        // fought WinForms focus + AutoComplete handle recreation and dropped the first
-        // character. Input now flows straight to the focused TextBox. This filter is
-        // retained only to satisfy IMessageFilter and does not intercept anything.
-        public bool PreFilterMessage(ref Message m) => false;
+        // When a new tab opens we set addressUserEditing=true and clear the box.
+        // The WebView2 control grabs OS focus during initialisation regardless of
+        // WinForms Focus() calls. We intercept WM_CHAR here so any printable keystroke
+        // typed immediately after opening a tab goes to the address bar, not the page.
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg == WM_CHAR && addressUserEditing && !addressBox.IsDisposed && !addressBox.Focused)
+            {
+                char ch = (char)m.WParam.ToInt32();
+                if (ch >= 0x20) // printable
+                {
+                    addressBox.Focus();
+                    // Let the char land in the now-focused address box normally.
+                }
+            }
+            return false;
+        }
 
         // Focus the address bar and select its contents so the first keystroke
         // replaces the pre-filled URL (standard browser omnibox behavior). Typing
@@ -969,6 +981,10 @@ namespace Ceprkac
                 addressBox.AutoCompleteMode = AutoCompleteMode.None;
                 addressBox.Text = "";
                 addressCommittedUrl = "";
+                // Try to focus the address bar. Even if WebView2 steals focus
+                // back during initialisation, PreFilterMessage will redirect any
+                // printable keystroke to the address bar while addressUserEditing
+                // is true, so the first character is never lost.
                 addressBox.Focus();
                 addressBox.SelectAll();
             }
