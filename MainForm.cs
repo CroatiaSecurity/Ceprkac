@@ -847,6 +847,8 @@ namespace Ceprkac
             string url = "";
             try { url = tab.WebView.CoreWebView2?.Source ?? tab.Url ?? ""; }
             catch { url = tab.Url ?? ""; }
+            // Don't show about:blank in the address bar — treat it as empty
+            if (url == "about:blank") url = "";
             if (!string.IsNullOrEmpty(url)) tab.Url = url;
             if (ActiveTab != tab) return;
             SetAddressText(url, force: force);
@@ -1414,8 +1416,9 @@ namespace Ceprkac
         private void NavigateCurrentTab(string url)
         {
             if (ActiveTab == null) return;
-            // Empty bar on a new tab = go to home page
-            if (string.IsNullOrWhiteSpace(url)) NavigateTab(ActiveTab, homePageUrl);
+            // Empty bar or about:blank on a new tab = go to home page
+            if (string.IsNullOrWhiteSpace(url) || url == "about:blank")
+                NavigateTab(ActiveTab, homePageUrl);
             else NavigateTab(ActiveTab, url);
         }
 
