@@ -1343,7 +1343,11 @@ namespace Ceprkac
         {
             core.SourceChanged += (_, _) =>
             {
-                tab.Url = core.Source ?? "";
+                var src = core.Source ?? "";
+                // Ignore about:blank — it's the transient state of a new tab
+                // before real navigation. Don't update tab.Url or the address bar.
+                if (src == "about:blank") return;
+                tab.Url = src;
                 // Always reflect the page the user is viewing — not the referrer / prior URL.
                 // Skip only while the user is mid-edit in the omnibox.
                 SyncAddressBarFromTab(tab);
@@ -1365,7 +1369,8 @@ namespace Ceprkac
             };
             core.HistoryChanged += (_, _) =>
             {
-                tab.Url = core.Source ?? tab.Url;
+                var src = core.Source ?? "";
+                if (src != "about:blank") tab.Url = src;
                 SyncAddressBarFromTab(tab);
                 if (ActiveTab == tab) UpdateTabState(tab);
             };
